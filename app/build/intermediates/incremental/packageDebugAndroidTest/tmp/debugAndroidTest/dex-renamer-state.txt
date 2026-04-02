@@ -1,0 +1,4 @@
+#Thu Apr 02 12:40:44 ICT 2026
+base.0=/Users/mac/Documents/Project/SearchTop/android_app/app/build/intermediates/dex/debugAndroidTest/mergeProjectDexDebugAndroidTest/0/classes.dex
+path.0=0/classes.dex
+renamed.0=classes.dex
