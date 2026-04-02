@@ -1,4 +1,0 @@
-#Thu Apr 02 15:06:43 ICT 2026
-base.0=/Users/mac/Documents/Project/SearchTop/topsearchproxy/app/build/intermediates/dex/debugAndroidTest/mergeProjectDexDebugAndroidTest/0/classes.dex
-path.0=0/classes.dex
-renamed.0=classes.dex
