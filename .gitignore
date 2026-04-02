@@ -1,0 +1,20 @@
+# Build outputs
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# App build
+app/build/
+
+# Keystore (never commit)
+*.jks
+*.keystore
+
+# Google Services (nếu có)
+google-services.json
