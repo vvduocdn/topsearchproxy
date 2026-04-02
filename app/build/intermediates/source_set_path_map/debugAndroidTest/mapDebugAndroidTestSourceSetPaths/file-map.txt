@@ -1,4 +1,4 @@
-com.topsearch.app.test.app-androidTest-0 /Users/mac/Documents/Project/SearchTop/android_app/app/build/generated/res/resValues/androidTest/debug
-com.topsearch.app.test.app-mergeDebugAndroidTestResources-1 /Users/mac/Documents/Project/SearchTop/android_app/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/merged.dir
-com.topsearch.app.test.app-mergeDebugAndroidTestResources-2 /Users/mac/Documents/Project/SearchTop/android_app/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/stripped.dir
-com.topsearch.app.test.app-debugAndroidTest-3 /Users/mac/Documents/Project/SearchTop/android_app/app/build/intermediates/merged_res/debugAndroidTest/mergeDebugAndroidTestResources
+com.topsearch.app.test.app-androidTest-0 /Users/mac/Documents/Project/SearchTop/topsearchproxy/app/build/generated/res/resValues/androidTest/debug
+com.topsearch.app.test.app-mergeDebugAndroidTestResources-1 /Users/mac/Documents/Project/SearchTop/topsearchproxy/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/merged.dir
+com.topsearch.app.test.app-mergeDebugAndroidTestResources-2 /Users/mac/Documents/Project/SearchTop/topsearchproxy/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/stripped.dir
+com.topsearch.app.test.app-debugAndroidTest-3 /Users/mac/Documents/Project/SearchTop/topsearchproxy/app/build/intermediates/merged_res/debugAndroidTest/mergeDebugAndroidTestResources

@@ -64,6 +64,7 @@ fun SearchScreen(
     var keyword      by remember(initialKeyword) { mutableStateOf(initialKeyword) }
     var selectedCity by remember { mutableStateOf(VIETNAM_CITIES[0]) }
     var dropdownOpen by remember { mutableStateOf(false) }
+    var useProxy     by remember { mutableStateOf(false) }
     val keyboard     = LocalSoftwareKeyboardController.current
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -116,7 +117,8 @@ fun SearchScreen(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {
                     keyboard?.hide()
-                    if (keyword.isNotBlank()) onSearch(keyword, selectedCity)
+                    val city = if (useProxy) selectedCity else selectedCity.copy(proxyHostPort = "")
+                    if (keyword.isNotBlank()) onSearch(keyword, city)
                 }),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -166,13 +168,37 @@ fun SearchScreen(
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(6.dp))
+
+            // ── Proxy toggle ───────────────────────────────────────────────
+            Row(
+                modifier     = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked         = useProxy,
+                    onCheckedChange = { useProxy = it },
+                    enabled         = !isLoading,
+                )
+                Text(
+                    text  = "Bật proxy theo tỉnh",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isLoading)
+                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f)
+                    else
+                        MaterialTheme.colorScheme.onBackground,
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
 
             // ── Button ─────────────────────────────────────────────────────
             Button(
                 onClick  = {
                     keyboard?.hide()
-                    if (keyword.isNotBlank()) onSearch(keyword, selectedCity)
+                    val city = if (useProxy) selectedCity
+                               else selectedCity.copy(proxyHostPort = "")
+                    if (keyword.isNotBlank()) onSearch(keyword, city)
                 },
                 enabled  = !isLoading && keyword.isNotBlank(),
                 shape    = RoundedCornerShape(14.dp),

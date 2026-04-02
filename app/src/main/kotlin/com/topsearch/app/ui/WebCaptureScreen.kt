@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.util.Log
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -254,6 +255,12 @@ fun WebCaptureScreen(
     // ── Bước 0: Đặt proxy rồi load URL ───────────────────────────────────────
     LaunchedEffect(webViewRef) {
         val wv = webViewRef ?: return@LaunchedEffect
+
+        // Xóa cookie Google trước mỗi search — tránh cookie PREF/location cũ
+        // từ tỉnh trước đè lên proxy IP mới (HN cookie → HCM proxy vẫn ra HN)
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
+
         if (proxyHost.isNotBlank()) {
             statusText = "Đang kết nối proxy…"
             // Nếu có local proxy → dùng 127.0.0.1:port (no auth needed, local proxy lo)
@@ -351,14 +358,19 @@ fun WebCaptureScreen(
                     settings.apply {
                         javaScriptEnabled    = true
                         domStorageEnabled    = true
+                        databaseEnabled      = true
                         userAgentString      = CHROME_UA
                         loadWithOverviewMode = true
                         useWideViewPort      = true
                         setSupportZoom(false)
                         builtInZoomControls  = false
                         displayZoomControls  = false
-                        cacheMode            = WebSettings.LOAD_NO_CACHE
+                        // Dùng cache mặc định để Google thấy session có history → ít CAPTCHA hơn
+                        cacheMode            = WebSettings.LOAD_DEFAULT
                     }
+                    // Bật cookie — quan trọng để Google nhận diện là browser thật
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     // ── Spoof geolocation (client-side) ─────────────────
                     // Grant quyền location tự động → không hỏi user
                     // Inject tọa độ giả trước khi Google JS chạy
