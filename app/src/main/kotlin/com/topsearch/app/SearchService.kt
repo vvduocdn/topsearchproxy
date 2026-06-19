@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
@@ -30,11 +31,15 @@ class SearchService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeClient: SignalRClient? = null
+    private var sourceName: String = ""
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
+        val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+        sourceName = "${Build.MANUFACTURER} ${Build.MODEL} (${androidId.take(8)})"
+        Log.d(TAG, "sourceName = $sourceName")
         createChannel()
     }
 
@@ -114,7 +119,7 @@ class SearchService : Service() {
                 results.forEachIndexed { i, r ->
                     Log.d(TAG, "  result[$i] rank=${r.rank} domain=${r.domain} url=${r.url}")
                 }
-                activeClient?.submit(requestId, results, imageUrls, publicIp)
+                activeClient?.submit(requestId, results, imageUrls, publicIp, sourceName)
                     ?: Log.e(TAG, "  ✗ activeClient is null — result NOT sent!")
                 showNotif("Đã gửi kết quả — chờ keyword tiếp theo")
             }

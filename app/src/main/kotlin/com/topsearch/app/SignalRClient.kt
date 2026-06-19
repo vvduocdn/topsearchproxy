@@ -41,10 +41,11 @@ class SignalRClient(
     }
 
     fun submit(
-        requestId: String,
-        items:     List<SearchResult>,
-        imageUrls: List<String> = emptyList(),
-        publicIp:  String       = "",
+        requestId:  String,
+        items:      List<SearchResult>,
+        imageUrls:  List<String> = emptyList(),
+        publicIp:   String       = "",
+        sourceName: String       = "",
     ) {
         val top10 = items.take(10)
         val itemsArr = JSONArray()
@@ -63,7 +64,8 @@ class SignalRClient(
                 if (imageUrls.isNotEmpty()) JSONArray().apply { imageUrls.forEach { put(it) } }
                 else JSONObject.NULL
             )
-            put("publicIp", if (publicIp.isNotBlank()) publicIp else JSONObject.NULL)
+            put("publicIp",    if (publicIp.isNotBlank())   publicIp   else JSONObject.NULL)
+            put("sourceName",  if (sourceName.isNotBlank()) sourceName else JSONObject.NULL)
         }
 
         val msg = JSONObject().apply {
@@ -72,7 +74,7 @@ class SignalRClient(
             put("arguments", JSONArray().apply { put(payload) })
         }.toString() + RS
 
-        Log.d(TAG, "▶ SUBMIT FRAME reqId=$requestId items=${top10.size} images=${imageUrls.size} publicIp=$publicIp")
+        Log.d(TAG, "▶ SUBMIT FRAME reqId=$requestId items=${top10.size} images=${imageUrls.size} publicIp=$publicIp sourceName=$sourceName")
         top10.forEachIndexed { i, r -> Log.d(TAG, "  [${i+1}] rank=${r.rank} domain=${r.domain} url=${r.url}") }
         imageUrls.forEachIndexed { i, u -> Log.d(TAG, "  img[$i] = $u") }
         Log.d(TAG, "  RAW MSG = ${msg.take(400)}")
