@@ -319,7 +319,9 @@ fun WebCaptureScreen(
             }
             if (!ok) Log.w(TAG, "Proxy set failed")
         }
-        wv.loadUrl(url)
+        wv.loadUrl(url, mapOf(
+            "Accept-Language" to "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+        ))
     }
 
     // Dọn dẹp khi rời màn hình
