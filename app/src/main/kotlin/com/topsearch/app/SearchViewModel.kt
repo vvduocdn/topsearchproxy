@@ -263,8 +263,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                     .connectTimeout(5, TimeUnit.SECONDS)
                     .readTimeout(5, TimeUnit.SECONDS)
                     .build()
-                val request = Request.Builder().url("https://api.ipify.org").build()
-                val ip = client.newCall(request).execute().use { it.body?.string()?.trim() ?: "" }
+                val request = Request.Builder().url("https://api64.ipify.org?format=json").build()
+                val body = client.newCall(request).execute().use { it.body?.string()?.trim() ?: "" }
+                val ip = org.json.JSONObject(body).optString("ip", "")
                 Log.d("TopSearch", "resolveIpViaProxy OK → $ip")
                 ip
             } catch (e: Exception) {
