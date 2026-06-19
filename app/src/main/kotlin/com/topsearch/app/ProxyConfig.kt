@@ -64,62 +64,15 @@ object CityProxies {
 
     /** Lấy ngẫu nhiên 1 proxy HCM từ pool 50 sessid */
     val HCM get() = HCM_POOL.random()
+    val HCM_POOL_PUBLIC: List<String> get() = HCM_POOL
 
-    // ── Hà Nội — pool 50 sessid ───────────────────────────────────────────────
+    // ── Hà Nội ────────────────────────────────────────────────────────────────
     private val HN_POOL = listOf(
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10050-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10051-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10052-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10053-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10054-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10055-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10056-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10057-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10058-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10059-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10060-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10061-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10062-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10063-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10064-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10065-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10066-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10067-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10068-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10069-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10070-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10071-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10072-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10073-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10074-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10075-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10076-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10077-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10078-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10079-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10080-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10081-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10082-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10083-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10084-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10085-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10086-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10087-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10088-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10089-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10090-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10091-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10092-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10093-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10094-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10095-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10096-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10097-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10098-m-1:w4vZUnJcYz9f3aC",
-        "gate.ipfoxy.io:58688:customer-pX4RmmaNy9-cc-VN-st-Hanoi-city-Hanoi-sessid-1775114881_10099-m-1:w4vZUnJcYz9f3aC",
+        "117.5.220.204:33978:lnjgv_itweb:dqzFqlTn",
     )
 
     val HN get() = HN_POOL.random()
+    val HN_POOL_PUBLIC: List<String> get() = HN_POOL
 
     // ── Đà Nẵng — pool 50 sessid ──────────────────────────────────────────────
     private val DN_POOL = listOf(
@@ -176,4 +129,5 @@ object CityProxies {
     )
 
     val DN get() = DN_POOL.random()
+    val DN_POOL_PUBLIC: List<String> get() = DN_POOL
 }

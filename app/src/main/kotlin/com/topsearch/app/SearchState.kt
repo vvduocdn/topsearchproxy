@@ -4,6 +4,7 @@ data class SearchResult(
     val rank:   Int,
     val title:  String,
     val domain: String  = "",
+    val url:    String  = "",
     val isAd:   Boolean = false,   // true = quảng cáo Google Ads
 )
 
@@ -16,19 +17,23 @@ sealed class SearchState {
         val keyword:   String,
         val url:       String,
         val city:      String = "",
-        val spoofLat:  Double = 0.0,   // tọa độ spoof geolocation trong WebView
+        val spoofLat:  Double = 0.0,
         val spoofLng:  Double = 0.0,
-        val proxyHost: String = "",    // "host:port" — blank = không dùng proxy
+        val proxyHost: String = "",
+        val proxyIp:   String = "",
+        val country:   Int    = 1,
     ) : SearchState()
 
     /** JS / OCR đang phân tích */
     data class Analyzing(val keyword: String) : SearchState()
 
     data class Done(
-        val keyword: String,
-        val results: List<SearchResult>,
+        val keyword:        String,
+        val results:        List<SearchResult>,
         val screenshotPath: String,
-        val city: String = "",
+        val city:           String = "",
+        val proxyIp:        String = "",
+        val socketInfo:     String = "",
     ) : SearchState()
 
     data class Error(

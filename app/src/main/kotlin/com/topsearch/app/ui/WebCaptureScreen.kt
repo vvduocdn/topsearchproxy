@@ -1,10 +1,17 @@
 package com.topsearch.app.ui
 
+import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.PixelCopy
 import android.view.View
 import android.webkit.CookieManager
+import android.webkit.WebStorage
 import android.webkit.GeolocationPermissions
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -225,6 +232,41 @@ private val EXTRACT_JS = """
 })()
 """.trimIndent()
 
+/** JS lấy vị trí Google đang phục vụ kết quả — trả raw text, không filter cứng */
+private val LOCATION_JS = """
+(function() {
+    try {
+        function clean(text) {
+            // Lấy phần trước dấu · hoặc - để bỏ "· Cập nhật vị trí"
+            return (text || '').split(/[·\-–|]/)[0].trim();
+        }
+
+        // 1. Location chip Google hiển thị đầu trang (ưu tiên nhất — chính xác nhất)
+        var chip = document.querySelector('g-location-chip, .tpmBl, .kPDuDb');
+        if (chip) {
+            var t1 = clean(chip.innerText || chip.textContent || '');
+            if (t1.length > 1) return t1;
+        }
+
+        // 2. Footer — thường chứa "Hà Nội · Cập nhật vị trí"
+        var foot = document.querySelector('#foot, #fbar, [id="foot"]');
+        if (foot) {
+            var t2 = clean(foot.innerText || foot.textContent || '');
+            if (t2.length > 1 && t2.length < 60) return t2;
+        }
+
+        // 3. Local pack header "Kết quả tìm kiếm gần ..."
+        var localHeader = document.querySelector('.yp1CPe, [data-attrid="location"]');
+        if (localHeader) {
+            var t3 = clean(localHeader.innerText || '');
+            if (t3.length > 1) return t3;
+        }
+
+        return '';
+    } catch(e) { return ''; }
+})()
+""".trimIndent()
+
 // ── Composable ────────────────────────────────────────────────────────────────
 
 @Composable
@@ -233,7 +275,7 @@ fun WebCaptureScreen(
     proxyHost: String = "",   // "host:port" — blank = trực tiếp (không qua proxy)
     spoofLat:  Double = 0.0,
     spoofLng:  Double = 0.0,
-    onCaptureDone: (screenshotPath: String, jsResults: List<SearchResult>) -> Unit,
+    onCaptureDone: (screenshotPaths: List<String>, jsResults: List<SearchResult>, detectedCity: String) -> Unit,
     onError:       (String) -> Unit,
 ) {
     val context        = LocalContext.current
@@ -256,10 +298,13 @@ fun WebCaptureScreen(
     LaunchedEffect(webViewRef) {
         val wv = webViewRef ?: return@LaunchedEffect
 
-        // Xóa cookie Google trước mỗi search — tránh cookie PREF/location cũ
-        // từ tỉnh trước đè lên proxy IP mới (HN cookie → HCM proxy vẫn ra HN)
+        // Xóa toàn bộ dữ liệu trình duyệt trước mỗi search — đảm bảo không có
+        // cookie/cache/localStorage từ tỉnh trước đè lên proxy IP mới
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
+        wv.clearCache(true)
+        wv.clearHistory()
+        WebStorage.getInstance().deleteAllData()
 
         if (proxyHost.isNotBlank()) {
             statusText = "Đang kết nối proxy…"
@@ -336,13 +381,22 @@ fun WebCaptureScreen(
         val jsResults = parseJsResults(jsonStr)
         Log.d(TAG, "PARSED ${jsResults.size} results")
 
+        // ── Bước 4b: Detect city từ DOM Google ───────────────────────────
+        val rawCity = suspendCancellableCoroutine { cont ->
+            wv.evaluateJavascript(LOCATION_JS) { r ->
+                cont.resume((r ?: "").trim().removeSurrounding("\""))
+            }
+        }
+        Log.d(TAG, "DETECTED CITY → $rawCity")
+
         // ── Bước 5: Chụp ảnh ─────────────────────────────────────────────
         try {
-            val path = captureWebView(wv, context.getExternalFilesDir(null))
-            onCaptureDone(path, jsResults)
+            val paths = captureWebViewTiles(wv, context.getExternalFilesDir(null))
+            Log.d(TAG, "Captured ${paths.size} tile(s)")
+            onCaptureDone(paths, jsResults, rawCity)
         } catch (e: Exception) {
             Log.e(TAG, "Capture failed", e)
-            onCaptureDone("", jsResults)
+            onCaptureDone(emptyList(), jsResults, rawCity)
         }
     }
 
@@ -354,7 +408,11 @@ fun WebCaptureScreen(
                 WebView(ctx).apply {
                     webViewRef = this
                     WebView.setWebContentsDebuggingEnabled(true)
-                    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                    // Software layer chỉ cần cho API < 26 (webView.draw fallback).
+                    // API >= 26 dùng PixelCopy đọc GPU surface → phải để hardware rendering.
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                    }
                     settings.apply {
                         javaScriptEnabled    = true
                         domStorageEnabled    = true
@@ -408,15 +466,13 @@ fun WebCaptureScreen(
                             view: WebView, req: WebResourceRequest, err: WebResourceError,
                         ) {
                             if (!req.isForMainFrame) return
-                            // Proxy có auth nhưng fail (session hết hạn / sai credentials)
-                            // → clear proxy, reload với UULE-only (không cần proxy)
                             if (localProxy != null && !proxyFallback) {
+                                // Proxy có auth nhưng fail → báo lỗi rõ, không fallback về IP thật
+                                // (fallback sẽ cho kết quả sai tỉnh vì IP máy ở HCM)
                                 proxyFallback = true
-                                Log.w(TAG, "Proxy failed (${err.description}), fallback UULE-only")
-                                statusText = "Proxy lỗi, dùng UULE…"
+                                Log.w(TAG, "Proxy failed (${err.description}) — không fallback để tránh kết quả sai tỉnh")
                                 ProxyHelper.clearProxy()
-                                done = false  // cho phép onPageFinished trigger lại
-                                view.loadUrl(url)
+                                onError("Proxy lỗi — thử lại để đổi proxy khác")
                             } else {
                                 onError("Lỗi tải trang: ${err.description}")
                             }
@@ -542,6 +598,7 @@ private fun parseJsResults(raw: String): List<SearchResult> {
                 rank   = i + 1,
                 title  = obj.optString("t", "").trim(),
                 domain = obj.optString("d", "").trim(),
+                url    = obj.optString("u", "").trim(),
                 isAd   = obj.optBoolean("ad", false),
             )
         }.filter { it.title.isNotBlank() }
@@ -550,21 +607,80 @@ private fun parseJsResults(raw: String): List<SearchResult> {
     }
 }
 
-private fun captureWebView(webView: WebView, dir: File?): String {
-    val viewW    = webView.width.takeIf  { it > 0 } ?: 1080
-    val viewH    = webView.height.takeIf { it > 0 } ?: 1920
-    @Suppress("DEPRECATION")
-    val scale    = webView.scale.takeIf { it > 0f } ?: 1f
-    val fullH    = (webView.contentHeight * scale).toInt().coerceAtLeast(viewH)
-    val captureH = minOf(fullH, viewH * 5)
+/**
+ * Scroll từ top → footer, chụp từng viewport bằng PixelCopy.
+ * Dùng window.innerHeight (CSS px) làm bước scroll — KHÔNG dùng webView.height (physical px)
+ * vì window.scrollTo nhận CSS pixels; trên thiết bị density=3 nếu dùng physical px sẽ nhảy
+ * 3 viewport một bước, bỏ qua hoàn toàn các tile giữa trang.
+ */
+private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<String> {
+    val w       = webView.width.takeIf  { it > 0 } ?: 1080
+    val viewHPx = webView.height.takeIf { it > 0 } ?: 1920  // physical px — cho PixelCopy
+    val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+    val base    = dir ?: File("/sdcard")
+    val paths   = mutableListOf<String>()
 
-    val bmp    = Bitmap.createBitmap(viewW, captureH, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bmp)
-    webView.draw(canvas)
+    val window = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        (webView.context as? Activity)?.window
+    } else null
+    val loc     = IntArray(2).also { webView.getLocationOnScreen(it) }
+    val srcRect = Rect(loc[0], loc[1], loc[0] + w, loc[1] + viewHPx)
 
-    val ts   = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-    val file = File(dir ?: File("/sdcard"), "screenshot_$ts.png")
-    FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.PNG, 90, it) }
-    bmp.recycle()
-    return file.absolutePath
+    webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+    delay(400)
+
+    // Lấy CSS viewport height — đây là đơn vị window.scrollTo dùng
+    val cssViewH = suspendCancellableCoroutine<Int> { cont ->
+        webView.evaluateJavascript("window.innerHeight") { r ->
+            cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: (viewHPx / 3))
+        }
+    }
+    Log.d(TAG, "captureWebViewTiles: viewHPx=$viewHPx cssViewH=$cssViewH")
+
+    var offsetY     = 0
+    var prevActualY = -1
+    var idx         = 0
+
+    while (idx < 20) {
+        webView.evaluateJavascript("window.scrollTo({top:$offsetY,behavior:'instant'});", null)
+        delay(500)
+
+        val actualY = suspendCancellableCoroutine<Int> { cont ->
+            webView.evaluateJavascript("window.pageYOffset") { r ->
+                cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: offsetY)
+            }
+        }
+
+        if (actualY == prevActualY) break
+
+        delay(100)
+
+        val file = File(base, "topsearch_${ts}_$idx.jpg")
+        if (window != null) {
+            val bmp = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.ARGB_8888)
+            suspendCancellableCoroutine<Unit> { cont ->
+                PixelCopy.request(window, srcRect, bmp, { result ->
+                    if (result != PixelCopy.SUCCESS) Log.w(TAG, "PixelCopy failed result=$result idx=$idx")
+                    cont.resume(Unit)
+                }, Handler(Looper.getMainLooper()))
+            }
+            FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            bmp.recycle()
+        } else {
+            val tile = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.ARGB_8888)
+            tile.eraseColor(android.graphics.Color.WHITE)
+            webView.draw(Canvas(tile))
+            FileOutputStream(file).use { tile.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            tile.recycle()
+        }
+
+        paths.add(file.absolutePath)
+        prevActualY = actualY
+        offsetY += cssViewH  // CSS px — mỗi bước đúng 1 viewport
+        idx++
+    }
+
+    webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+    Log.d(TAG, "Captured ${paths.size} tile(s), cssViewH=$cssViewH")
+    return paths
 }

@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(find /Users/mac/Documents/Project/SearchTop/topsearchproxy/app/src -type f \\\\\\(-name *.xml -o -name *.kt -o -name *.java \\\\\\))"
-    ]
-  }
-}

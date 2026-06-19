@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +20,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.topsearch.app.SearchResult
+import kotlinx.coroutines.launch
 
 // ── Google colour palette ─────────────────────────────────────────────────────
 private val GoogleBlue  = Color(0xFF1A73E8)
@@ -40,11 +44,18 @@ fun ResultsScreen(
     results:        List<SearchResult>,
     screenshotPath: String,
     city:           String = "",
+    proxyIp:        String = "",
+    socketInfo:     String = "",
+    onBack:         () -> Unit = {},
     onSearchAgain:  () -> Unit,
 ) {
     var showScreenshot by remember { mutableStateOf(false) }
+    val clipboard      = LocalClipboardManager.current
+    val snackbarState  = remember { SnackbarHostState() }
+    val scope          = rememberCoroutineScope()
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -56,6 +67,7 @@ fun ResultsScreen(
                             buildString {
                                 append("\"$keyword\"")
                                 if (city.isNotBlank() && city != "🌐 Toàn quốc") append("  ·  $city")
+                                if (proxyIp.isNotBlank()) append("  ·  $proxyIp")
                             },
                             style    = MaterialTheme.typography.bodySmall,
                             color    = GoogleBlue,
@@ -65,11 +77,17 @@ fun ResultsScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onSearchAgain) {
+                    IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại")
                     }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        clipboard.setText(AnnotatedString(buildPlainText(keyword, city, proxyIp, results)))
+                        scope.launch { snackbarState.showSnackbar("Đã copy kết quả") }
+                    }) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy kết quả")
+                    }
                     if (screenshotPath.isNotBlank()) {
                         IconButton(onClick = { showScreenshot = true }) {
                             Icon(Icons.Default.Image, contentDescription = "Xem ảnh")
@@ -91,6 +109,30 @@ fun ResultsScreen(
                 modifier       = Modifier.fillMaxSize().padding(padding),
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
+                // ── Socket request info card ──────────────────────────────
+                if (socketInfo.isNotBlank()) {
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFE8F5E9),
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Text(
+                                text     = socketInfo,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                style    = MaterialTheme.typography.bodySmall,
+                                color    = Color(0xFF1B5E20),
+                                lineHeight = 20.sp,
+                            )
+                        }
+                        HorizontalDivider(color = DividerColor)
+                    }
+                }
+
                 // Header "Khoảng X kết quả"
                 item {
                     Text(
@@ -257,6 +299,22 @@ private fun EmptyState(modifier: Modifier, onRetry: () -> Unit) {
         Button(onClick = onRetry, shape = RoundedCornerShape(12.dp)) { Text("Thử lại") }
     }
 }
+
+// ── Plain-text formatter for clipboard ───────────────────────────────────────
+
+private fun buildPlainText(keyword: String, city: String, proxyIp: String, results: List<SearchResult>): String =
+    buildString {
+        append("Từ khoá: $keyword\n")
+        if (city.isNotBlank() && city != "🌐 Toàn quốc") append("Khu vực: $city\n")
+        if (proxyIp.isNotBlank()) append("IP: $proxyIp\n")
+        append("\n")
+        results.forEach { r ->
+            val label = if (r.isAd) "Top ${r.rank} [QC]" else "Top ${r.rank}"
+            append("$label: ${r.domain}\n")
+            if (r.url.isNotBlank()) append("${r.url}\n")
+            append("\n")
+        }
+    }.trimEnd()
 
 // ── Screenshot dialog ─────────────────────────────────────────────────────────
 

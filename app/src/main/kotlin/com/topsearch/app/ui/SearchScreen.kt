@@ -1,14 +1,28 @@
 package com.topsearch.app.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -16,31 +30,31 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/**
- * @param nearParam    tên địa điểm cho Google near= param
- * @param lat / lng    tọa độ thực dùng cho UULE + spoof geolocation
- * @param proxyHostPort "host:port:user:pass" — proxy residential theo tỉnh (blank = trực tiếp)
- */
 data class VietnamCity(
-    val label:         String,
-    val nearParam:     String,
-    val lat:           Double = 0.0,
-    val lng:           Double = 0.0,
-    val proxyHostPort: String = "",
-)
+    val label:     String,
+    val nearParam: String,
+    val lat:       Double       = 0.0,
+    val lng:       Double       = 0.0,
+    val proxyPool: List<String> = emptyList(),
+) {
+    val proxyHostPort: String get() = proxyPool.randomOrNull() ?: ""
+    fun withNoProxy() = copy(proxyPool = emptyList())
+}
 
 val VIETNAM_CITIES = listOf(
     VietnamCity("🌐 Toàn quốc",   "",                          0.0,      0.0),
-    VietnamCity("🏙 Hà Nội",       "Ha Noi, Vietnam",           21.0285,  105.8542, com.topsearch.app.CityProxies.HN),
-    VietnamCity("🌆 TP. HCM",      "Ho Chi Minh City, Vietnam", 10.8231,  106.6297, com.topsearch.app.CityProxies.HCM),
-    VietnamCity("🌊 Đà Nẵng",      "Da Nang, Vietnam",          16.0544,  108.2022, com.topsearch.app.CityProxies.DN),
+    VietnamCity("🏙 Hà Nội",       "Ha Noi, Vietnam",           21.0285,  105.8542, com.topsearch.app.CityProxies.HN_POOL_PUBLIC),
+    VietnamCity("🌆 TP. HCM",      "Ho Chi Minh City, Vietnam", 10.8231,  106.6297, com.topsearch.app.CityProxies.HCM_POOL_PUBLIC),
+    VietnamCity("🌊 Đà Nẵng",      "Da Nang, Vietnam",          16.0544,  108.2022, com.topsearch.app.CityProxies.DN_POOL_PUBLIC),
     VietnamCity("🌸 Huế",          "Hue, Vietnam",              16.4637,  107.5909),
     VietnamCity("🏖 Nha Trang",    "Nha Trang, Vietnam",        12.2388,  109.1967),
     VietnamCity("🏝 Phú Quốc",     "Phu Quoc, Vietnam",         10.2899,  103.9840),
@@ -51,189 +65,479 @@ val VIETNAM_CITIES = listOf(
     VietnamCity("🏭 Đồng Nai",     "Dong Nai, Vietnam",         10.9452,  107.1351),
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
-    loadingStep:    String = "",
-    countdown:      Int    = 0,
-    errorMessage:   String = "",
-    initialKeyword: String = "",
-    onSearch:       (keyword: String, city: VietnamCity) -> Unit,
+    loadingStep:       String  = "",
+    countdown:         Int     = 0,
+    errorMessage:      String  = "",
+    initialKeyword:    String  = "",
+    skipProxy:         Boolean = false,
+    socketInfo:        String  = "",
+    isConnected:       Boolean = false,
+    lastKeyword:       String  = "",
+    lastResultCount:   Int     = 0,
+    lastResultInfo:    String  = "",
+    onViewResults:     () -> Unit = {},
+    onSkipProxyChange: (Boolean) -> Unit = {},
+    onSearch:          (keyword: String, city: VietnamCity) -> Unit,
 ) {
-    val isLoading    = loadingStep.isNotEmpty()
-    var keyword      by remember(initialKeyword) { mutableStateOf(initialKeyword) }
-    var selectedCity by remember { mutableStateOf(VIETNAM_CITIES[0]) }
-    var dropdownOpen by remember { mutableStateOf(false) }
-    var useProxy     by remember { mutableStateOf(false) }
-    val keyboard     = LocalSoftwareKeyboardController.current
+    val isLoading = loadingStep.isNotEmpty()
+    var showManual by remember { mutableStateOf(false) }
+
+    // Nếu có lỗi manual search → giữ manual mode
+    LaunchedEffect(errorMessage) {
+        if (errorMessage.isNotEmpty()) showManual = true
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(
-            modifier            = Modifier
-                .fillMaxSize()
-                .systemBarsPadding()
-                .padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(Modifier.height(48.dp))
+        AnimatedContent(
+            targetState = showManual,
+            transitionSpec = {
+                if (targetState) {
+                    slideInVertically { it } + fadeIn(tween(280)) togetherWith
+                        fadeOut(tween(180))
+                } else {
+                    fadeIn(tween(280)) togetherWith
+                        slideOutVertically { it } + fadeOut(tween(180))
+                }
+            },
+            label = "search_mode",
+        ) { isManual ->
+            if (isManual) {
+                ManualSearchContent(
+                    isLoading        = isLoading,
+                    loadingStep      = loadingStep,
+                    errorMessage     = errorMessage,
+                    initialKeyword   = initialKeyword,
+                    skipProxy        = skipProxy,
+                    isConnected      = isConnected,
+                    onSkipProxyChange = onSkipProxyChange,
+                    onSearch         = onSearch,
+                    onBack           = { showManual = false },
+                )
+            } else {
+                StandbyContent(
+                    isLoading       = isLoading,
+                    loadingStep     = loadingStep,
+                    isConnected     = isConnected,
+                    socketInfo      = socketInfo,
+                    lastKeyword     = lastKeyword,
+                    lastResultCount = lastResultCount,
+                    lastResultInfo  = lastResultInfo,
+                    onViewResults   = onViewResults,
+                    onManualClick   = { showManual = true },
+                )
+            }
+        }
+    }
+}
 
-            // ── Logo ─────────────────────────────────────────────────────
+// ── Standby screen ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun StandbyContent(
+    isLoading:       Boolean,
+    loadingStep:     String,
+    isConnected:     Boolean,
+    socketInfo:      String,
+    lastKeyword:     String,
+    lastResultCount: Int,
+    lastResultInfo:  String,
+    onViewResults:   () -> Unit,
+    onManualClick:   () -> Unit,
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val ringScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue  = 1.45f,
+        animationSpec = infiniteRepeatable(
+            animation  = tween(1400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "ring_scale",
+    )
+    val ringAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.5f,
+        targetValue  = 0f,
+        animationSpec = infiniteRepeatable(
+            animation  = tween(1400),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ring_alpha",
+    )
+
+    Column(
+        modifier            = Modifier
+            .fillMaxSize()
+            .systemBarsPadding()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(16.dp))
+
+        // ── Top bar ────────────────────────────────────────────────────────
+        Row(
+            modifier          = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                "TopSearch",
+                style      = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            ConnectionBadge(isConnected)
+        }
+
+        Spacer(Modifier.weight(0.35f))
+
+        // ── Pulse ring ─────────────────────────────────────────────────────
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(130.dp)) {
+            if (isConnected && !isLoading) {
+                Box(
+                    modifier = Modifier
+                        .size(100.dp)
+                        .scale(ringScale)
+                        .clip(CircleShape)
+                        .background(Color(0xFF22C55E).copy(alpha = ringAlpha)),
+                )
+            }
             Box(
                 modifier = Modifier
-                    .size(64.dp)
-                    .clip(RoundedCornerShape(18.dp))
+                    .size(84.dp)
+                    .clip(CircleShape)
                     .background(
-                        Brush.linearGradient(listOf(
-                            MaterialTheme.colorScheme.primary,
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                        ))
+                        when {
+                            isLoading   -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                            isConnected -> Color(0xFFDCFCE7)
+                            else        -> MaterialTheme.colorScheme.surfaceVariant
+                        }
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Default.Search, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(34.dp))
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier    = Modifier.size(34.dp),
+                        strokeWidth = 2.5.dp,
+                    )
+                } else {
+                    Icon(
+                        imageVector     = Icons.Default.Search,
+                        contentDescription = null,
+                        modifier        = Modifier.size(36.dp),
+                        tint            = if (isConnected) Color(0xFF16A34A)
+                                          else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    )
+                }
             }
-            Spacer(Modifier.height(14.dp))
-            Text("TopSearch", style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold)
-            Text("Top 10 kết quả tìm kiếm thực tế",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f))
+        }
 
-            Spacer(Modifier.height(36.dp))
+        Spacer(Modifier.height(22.dp))
 
-            // ── Keyword ───────────────────────────────────────────────────
-            OutlinedTextField(
-                value         = keyword,
-                onValueChange = { keyword = it },
-                enabled       = !isLoading,
-                placeholder   = { Text("Nhập keyword cần phân tích…") },
-                leadingIcon   = {
-                    Icon(Icons.Default.Search, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary)
-                },
-                singleLine    = true,
-                shape         = RoundedCornerShape(16.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
-                    keyboard?.hide()
-                    val city = if (useProxy) selectedCity else selectedCity.copy(proxyHostPort = "")
-                    if (keyword.isNotBlank()) onSearch(keyword, city)
-                }),
-                modifier = Modifier.fillMaxWidth(),
-            )
+        // ── Status text ────────────────────────────────────────────────────
+        Text(
+            text = when {
+                isLoading   -> loadingStep
+                isConnected -> "Đang chờ keyword từ server..."
+                else        -> "Đang kết nối lại..."
+            },
+            style      = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
+            color = when {
+                isLoading   -> MaterialTheme.colorScheme.primary
+                isConnected -> Color(0xFF16A34A)
+                else        -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+            },
+            textAlign = TextAlign.Center,
+        )
 
-            Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(6.dp))
 
-            // ── Location picker ───────────────────────────────────────────
-            ExposedDropdownMenuBox(
-                expanded         = dropdownOpen && !isLoading,
-                onExpandedChange = { if (!isLoading) dropdownOpen = it },
+        Text(
+            text = when {
+                isLoading   -> "WebView đang chụp kết quả Google..."
+                isConnected -> "Server sẽ gửi keyword tự động khi có yêu cầu"
+                else        -> "Kiểm tra kết nối mạng nếu mất quá lâu"
+            },
+            style     = MaterialTheme.typography.bodySmall,
+            color     = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f),
+            textAlign = TextAlign.Center,
+        )
+
+        Spacer(Modifier.weight(0.45f))
+
+        // ── Last result card OR socket-info card ───────────────────────────
+        AnimatedVisibility(
+            visible = lastKeyword.isNotEmpty(),
+            enter   = fadeIn() + expandVertically(),
+            exit    = fadeOut() + shrinkVertically(),
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                ),
+                shape = RoundedCornerShape(14.dp),
             ) {
-                OutlinedTextField(
-                    value         = selectedCity.label,
-                    onValueChange = {},
-                    readOnly      = true,
-                    enabled       = !isLoading,
-                    label         = { Text("Khu vực tìm kiếm") },
-                    leadingIcon   = {
-                        Icon(Icons.Default.LocationOn, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary)
-                    },
-                    trailingIcon  = { ExposedDropdownMenuDefaults.TrailingIcon(dropdownOpen) },
-                    shape         = RoundedCornerShape(16.dp),
-                    modifier      = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                    colors        = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-                )
-                ExposedDropdownMenu(
-                    expanded         = dropdownOpen,
-                    onDismissRequest = { dropdownOpen = false },
-                ) {
-                    VIETNAM_CITIES.forEach { city ->
-                        DropdownMenuItem(
-                            text = {
-                                Text(city.label,
-                                    fontWeight = if (city == selectedCity)
-                                        FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (city == selectedCity)
-                                        MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface)
-                            },
-                            onClick = { selectedCity = city; dropdownOpen = false },
-                            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
-                        )
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text       = lastResultInfo,
+                        color      = MaterialTheme.colorScheme.onPrimaryContainer,
+                        style      = MaterialTheme.typography.bodySmall,
+                        lineHeight = 19.sp,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick  = onViewResults,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape    = RoundedCornerShape(10.dp),
+                    ) {
+                        Text("Xem $lastResultCount kết quả  →", fontSize = 14.sp)
                     }
                 }
             }
-
-            Spacer(Modifier.height(6.dp))
-
-            // ── Proxy toggle ───────────────────────────────────────────────
-            Row(
-                modifier     = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Checkbox(
-                    checked         = useProxy,
-                    onCheckedChange = { useProxy = it },
-                    enabled         = !isLoading,
-                )
-                Text(
-                    text  = "Bật proxy theo tỉnh",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isLoading)
-                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f)
-                    else
-                        MaterialTheme.colorScheme.onBackground,
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // ── Button ─────────────────────────────────────────────────────
-            Button(
-                onClick  = {
-                    keyboard?.hide()
-                    val city = if (useProxy) selectedCity
-                               else selectedCity.copy(proxyHostPort = "")
-                    if (keyword.isNotBlank()) onSearch(keyword, city)
-                },
-                enabled  = !isLoading && keyword.isNotBlank(),
-                shape    = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.onPrimary)
-                    Spacer(Modifier.width(10.dp))
-                    Text(loadingStep, fontSize = 15.sp)
-                } else {
-                    Icon(Icons.Default.Search, contentDescription = null,
-                        modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Bắt đầu tìm kiếm", fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold)
-                }
-            }
-
-            // ── Error ──────────────────────────────────────────────────────
-            AnimatedVisibility(visible = errorMessage.isNotEmpty(),
-                enter = fadeIn(), exit = fadeOut()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-                    colors   = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(errorMessage, color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(14.dp),
-                        style    = MaterialTheme.typography.bodyMedium)
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
         }
+
+        AnimatedVisibility(
+            visible = lastKeyword.isEmpty() && socketInfo.isNotEmpty(),
+            enter   = fadeIn() + expandVertically(),
+            exit    = fadeOut() + shrinkVertically(),
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                ),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text(
+                    text       = socketInfo,
+                    color      = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier   = Modifier.padding(14.dp),
+                    style      = MaterialTheme.typography.bodySmall,
+                    lineHeight = 19.sp,
+                )
+            }
+        }
+
+        // ── Manual button ──────────────────────────────────────────────────
+        OutlinedButton(
+            onClick  = onManualClick,
+            enabled  = !isLoading,
+            modifier = Modifier.fillMaxWidth(),
+            shape    = RoundedCornerShape(12.dp),
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Tìm kiếm thủ công", fontSize = 14.sp)
+        }
+
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// ── Manual search screen ────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ManualSearchContent(
+    isLoading:        Boolean,
+    loadingStep:      String,
+    errorMessage:     String,
+    initialKeyword:   String,
+    skipProxy:        Boolean,
+    isConnected:      Boolean,
+    onSkipProxyChange: (Boolean) -> Unit,
+    onSearch:         (keyword: String, city: VietnamCity) -> Unit,
+    onBack:           () -> Unit,
+) {
+    var keyword      by remember(initialKeyword) { mutableStateOf(initialKeyword) }
+    var selectedCity by remember { mutableStateOf(VIETNAM_CITIES[0]) }
+    var dropdownOpen by remember { mutableStateOf(false) }
+    val keyboard     = LocalSoftwareKeyboardController.current
+
+    Column(
+        modifier            = Modifier
+            .fillMaxSize()
+            .systemBarsPadding()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(8.dp))
+
+        // ── Top bar ────────────────────────────────────────────────────────
+        Row(
+            modifier          = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack, enabled = !isLoading) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại")
+            }
+            Text(
+                "Tìm kiếm thủ công",
+                style      = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier   = Modifier.weight(1f).padding(start = 4.dp),
+            )
+            ConnectionBadge(isConnected)
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // ── Keyword ────────────────────────────────────────────────────────
+        OutlinedTextField(
+            value         = keyword,
+            onValueChange = { keyword = it },
+            enabled       = !isLoading,
+            placeholder   = { Text("Nhập keyword cần phân tích…") },
+            leadingIcon   = {
+                Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary)
+            },
+            singleLine    = true,
+            shape         = RoundedCornerShape(16.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = {
+                keyboard?.hide()
+                if (keyword.isNotBlank()) onSearch(keyword, selectedCity)
+            }),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        // ── City picker ────────────────────────────────────────────────────
+        ExposedDropdownMenuBox(
+            expanded         = dropdownOpen && !isLoading,
+            onExpandedChange = { if (!isLoading) dropdownOpen = it },
+        ) {
+            OutlinedTextField(
+                value         = selectedCity.label,
+                onValueChange = {},
+                readOnly      = true,
+                enabled       = !isLoading,
+                label         = { Text("Khu vực tìm kiếm") },
+                leadingIcon   = {
+                    Icon(Icons.Default.LocationOn, null, tint = MaterialTheme.colorScheme.primary)
+                },
+                trailingIcon  = { ExposedDropdownMenuDefaults.TrailingIcon(dropdownOpen) },
+                shape         = RoundedCornerShape(16.dp),
+                modifier      = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                colors        = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+            )
+            ExposedDropdownMenu(
+                expanded         = dropdownOpen,
+                onDismissRequest = { dropdownOpen = false },
+            ) {
+                VIETNAM_CITIES.forEach { city ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                city.label,
+                                fontWeight = if (city == selectedCity) FontWeight.SemiBold else FontWeight.Normal,
+                                color      = if (city == selectedCity) MaterialTheme.colorScheme.primary
+                                             else MaterialTheme.colorScheme.onSurface,
+                            )
+                        },
+                        onClick        = { selectedCity = city; dropdownOpen = false },
+                        contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // ── Proxy toggle ───────────────────────────────────────────────────
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked         = skipProxy,
+                onCheckedChange = onSkipProxyChange,
+                enabled         = !isLoading,
+            )
+            Text(
+                "Không dùng proxy (dùng mạng điện thoại trực tiếp)",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isLoading) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f)
+                        else MaterialTheme.colorScheme.onBackground,
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // ── Search button ──────────────────────────────────────────────────
+        Button(
+            onClick  = {
+                keyboard?.hide()
+                if (keyword.isNotBlank()) onSearch(keyword, selectedCity)
+            },
+            enabled  = !isLoading && keyword.isNotBlank(),
+            shape    = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier    = Modifier.size(20.dp),
+                    strokeWidth = 2.5.dp,
+                    color       = MaterialTheme.colorScheme.onPrimary,
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(loadingStep, fontSize = 15.sp)
+            } else {
+                Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Bắt đầu tìm kiếm", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        // ── Error ──────────────────────────────────────────────────────────
+        AnimatedVisibility(
+            visible = errorMessage.isNotEmpty(),
+            enter   = fadeIn(),
+            exit    = fadeOut(),
+        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                colors   = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                ),
+                shape    = RoundedCornerShape(12.dp),
+            ) {
+                Text(
+                    errorMessage,
+                    color    = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(14.dp),
+                    style    = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+
+        Spacer(Modifier.weight(1f))
+    }
+}
+
+// ── Shared ──────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun ConnectionBadge(isConnected: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (isConnected) Color(0xFF22C55E) else Color(0xFFBDBDBD)),
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text  = if (isConnected) "Kết nối" else "Chưa kết nối",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isConnected) Color(0xFF16A34A)
+                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+        )
     }
 }

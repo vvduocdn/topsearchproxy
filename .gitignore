@@ -18,3 +18,11 @@ app/build/
 
 # Google Services (nếu có)
 google-services.json
+
+# Claude Code settings
+.claude/
+
+# Demo & release artifacts
+Demo_QuyTrinh_AppTopsearch/
+Demo_QuyTrinh_AppTopsearch.zip
+app/release/
