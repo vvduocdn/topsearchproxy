@@ -78,8 +78,8 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
             val encoded    = URLEncoder.encode(kw, "UTF-8")
             val googleUrl  = when (country) {
-                2    -> "https://www.google.co.th/search?q=$encoded&hl=th&gl=th&pws=0"
-                else -> "https://www.google.com/search?q=$encoded"
+                2    -> "https://www.google.co.th/search?q=$encoded&hl=th&gl=th&pws=0&nfpr=1"
+                else -> "https://www.google.com/search?q=$encoded&gl=vn&hl=vi&pws=0&nfpr=1"
             }
 
             _state.value = SearchState.WebCapturing(
@@ -115,7 +115,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             _state.value = SearchState.WebCapturing(
                 keyword   = kw,
                 city      = cityLabel,
-                url       = "https://www.google.com/search?q=$encoded",
+                url       = "https://www.google.com/search?q=$encoded&gl=vn&hl=vi&pws=0&nfpr=1",
                 spoofLat  = 0.0,
                 spoofLng  = 0.0,
                 proxyHost = proxyPick,
