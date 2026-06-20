@@ -272,6 +272,7 @@ private val LOCATION_JS = """
 @Composable
 fun WebCaptureScreen(
     url:       String,
+    keyword:   String = "",
     proxyHost: String = "",   // "host:port" — blank = trực tiếp (không qua proxy)
     spoofLat:  Double = 0.0,
     spoofLng:  Double = 0.0,
@@ -457,11 +458,18 @@ fun WebCaptureScreen(
                         }
 
                         override fun onPageFinished(view: WebView, url: String) {
-                            // Inject lại sau khi page load (Google SPA có thể reset)
                             if (spoofLat != 0.0 && spoofLng != 0.0) {
                                 view.evaluateJavascript(buildSpoofLocationJs(spoofLat, spoofLng), null)
                             }
-                            if (!done) { done = true; pageLoaded = true }
+                            if (done) return
+                            if (keyword.isNotBlank() && !url.contains("/search")) {
+                                // Phase 1: homepage loaded → inject keyword and submit
+                                view.evaluateJavascript(buildSearchJs(keyword), null)
+                            } else {
+                                // Phase 2: results page (or direct URL) → trigger extraction
+                                done = true
+                                pageLoaded = true
+                            }
                         }
 
                         override fun onReceivedError(
@@ -554,6 +562,20 @@ private fun CountdownOverlay(countdown: Int, statusText: String) {
  * JS override navigator.geolocation — Google client sẽ thấy vị trí giả này.
  * Inject cả onPageStarted lẫn onPageFinished để cover Google SPA re-render.
  */
+private fun buildSearchJs(keyword: String): String {
+    val escaped = keyword.replace("\\", "\\\\").replace("'", "\\'")
+    return """
+    (function() {
+        var q = document.querySelector('textarea[name="q"]') || document.querySelector('input[name="q"]');
+        if (!q) return false;
+        q.value = '$escaped';
+        var form = q.form || q.closest('form');
+        if (form) { form.submit(); return true; }
+        return false;
+    })()
+    """.trimIndent()
+}
+
 private fun buildSpoofLocationJs(lat: Double, lng: Double) = """
 (function() {
     var _lat = $lat, _lng = $lng;

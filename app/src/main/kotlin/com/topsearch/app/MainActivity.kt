@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
                     is SearchState.WebCapturing ->
                         WebCaptureScreen(
                             url           = s.url,
+                            keyword       = s.keyword,
                             proxyHost     = s.proxyHost,
                             spoofLat      = s.spoofLat,
                             spoofLng      = s.spoofLng,

@@ -76,10 +76,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 } ?: ""
             } else ""
 
-            val encoded    = URLEncoder.encode(kw, "UTF-8")
             val googleUrl  = when (country) {
-                2    -> "https://www.google.co.th/search?q=$encoded&hl=th&gl=th&pws=0&nfpr=1&num=10"
-                else -> "https://www.google.com/search?q=$encoded&gl=vn&hl=vi&pws=0&nfpr=1&num=10"
+                2    -> "https://www.google.co.th/?hl=th&gl=th&pws=0"
+                else -> "https://www.google.com.vn/?hl=vi&gl=vn&pws=0"
             }
 
             _state.value = SearchState.WebCapturing(
@@ -110,12 +109,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 withTimeoutOrNull(4000L) { resolveIpViaProxy(proxyPick) } ?: ""
             } else ""
 
-            val encoded = URLEncoder.encode(kw, "UTF-8")
-
             _state.value = SearchState.WebCapturing(
                 keyword   = kw,
                 city      = cityLabel,
-                url       = "https://www.google.com/search?q=$encoded&gl=vn&hl=vi&pws=0&nfpr=1&num=10",
+                url       = "https://www.google.com.vn/?hl=vi&gl=vn&pws=0",
                 spoofLat  = 0.0,
                 spoofLng  = 0.0,
                 proxyHost = proxyPick,
