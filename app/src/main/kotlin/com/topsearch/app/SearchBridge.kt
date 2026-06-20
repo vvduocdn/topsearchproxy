@@ -25,7 +25,7 @@ object SearchBridge {
     val isConnected = MutableStateFlow(false)
 
     /** Service → ViewModel: new keyword to search */
-    val incoming = MutableSharedFlow<SocketRequest>(extraBufferCapacity = 1)
+    val incoming = MutableSharedFlow<SocketRequest>(extraBufferCapacity = 64)
 
     /** ViewModel → Service: search results ready (screenshotPaths empty if capture failed) */
     fun dispatchResult(

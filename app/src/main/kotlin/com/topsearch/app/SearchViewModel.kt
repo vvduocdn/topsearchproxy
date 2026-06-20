@@ -7,7 +7,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.topsearch.app.ui.VietnamCity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,51 +53,79 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     // Job auto-reset về Idle sau khi hiện kết quả socket
     private var socketDoneJob: Job? = null
 
+    // Sequential queue — keywords from socket are processed one at a time
+    private val requestQueue = Channel<SearchBridge.SocketRequest>(Channel.UNLIMITED)
+    private var currentDone: CompletableDeferred<Unit>? = null
+    private var pendingQueueCount = 0
+
     init {
-        // Nhận keyword từ SearchService qua SearchBridge
+        // Forward incoming socket requests to the sequential queue
         viewModelScope.launch {
             SearchBridge.incoming.collect { req ->
-                startSearchFromSocket(req.requestId, req.keyword, req.proxy, req.country)
+                pendingQueueCount++
+                requestQueue.send(req)
+                Log.d("TopSearch", "Enqueued '${req.keyword}' pending=$pendingQueueCount reqId=${req.requestId}")
+            }
+        }
+        // Sequential processor — waits for each search to complete before starting the next
+        viewModelScope.launch {
+            for (req in requestQueue) {
+                pendingQueueCount = (pendingQueueCount - 1).coerceAtLeast(0)
+                processSocketRequest(req)
             }
         }
     }
 
-    /** Triggered bởi SearchService khi nhận CheckKeyword từ server */
-    fun startSearchFromSocket(requestId: String, keyword: String, proxy: String, country: Int = 1) {
-        val kw = keyword.trim().ifBlank { return }
+    private suspend fun processSocketRequest(req: SearchBridge.SocketRequest) {
+        val kw = req.keyword.trim().ifBlank { return }
         socketDoneJob?.cancel()
-        socketRequestId = requestId
+        socketRequestId = req.requestId
 
-        val effectiveProxy = if (_skipProxy.value) "" else proxy
-        Log.d("TopSearch", "startSearchFromSocket: kw='$kw' proxy='$proxy' skipProxy=${_skipProxy.value} effective='$effectiveProxy' country=$country")
-        if (effectiveProxy.isBlank()) {
-            Log.w("TopSearch", "startSearchFromSocket: NO PROXY — searching without proxy (server sent='$proxy' skipProxy=${_skipProxy.value})")
+        val effectiveProxy = if (_skipProxy.value) "" else req.proxy
+        Log.d("TopSearch", "processSocketRequest: kw='$kw' proxy='${req.proxy}' skipProxy=${_skipProxy.value} effective='$effectiveProxy' country=${req.country}")
+
+        val queueSuffix = if (pendingQueueCount > 0) " (còn $pendingQueueCount đang chờ)" else ""
+        _socketInfo.value = "Đang xử lý: \"$kw\"$queueSuffix"
+
+        val proxyIp = if (effectiveProxy.isNotBlank()) {
+            withTimeoutOrNull(8_000L) {
+                runCatching { resolveIpViaProxy(effectiveProxy) }.getOrElse { "" }
+            } ?: ""
+        } else ""
+
+        val googleUrl = when (req.country) {
+            2    -> "https://www.google.co.th/?hl=th&gl=th&pws=0"
+            else -> "https://www.google.com.vn/?hl=vi&gl=vn&pws=0"
         }
-        _socketInfo.value = "Nhận keyword từ server: \"$kw\""
 
-        viewModelScope.launch {
-            val proxyIp = if (effectiveProxy.isNotBlank()) {
-                withTimeoutOrNull(8000L) {
-                    runCatching { resolveIpViaProxy(effectiveProxy) }.getOrElse { "" }
-                } ?: ""
-            } else ""
+        val done = CompletableDeferred<Unit>()
+        currentDone = done
 
-            val googleUrl  = when (country) {
-                2    -> "https://www.google.co.th/?hl=th&gl=th&pws=0"
-                else -> "https://www.google.com.vn/?hl=vi&gl=vn&pws=0"
-            }
+        _state.value = SearchState.WebCapturing(
+            keyword   = kw,
+            city      = "",
+            url       = googleUrl,
+            spoofLat  = 0.0,
+            spoofLng  = 0.0,
+            proxyHost = effectiveProxy,
+            proxyIp   = proxyIp,
+            country   = req.country,
+        )
 
-            _state.value = SearchState.WebCapturing(
-                keyword   = kw,
-                city      = "",
-                url       = googleUrl,
-                spoofLat  = 0.0,
-                spoofLng  = 0.0,
-                proxyHost = effectiveProxy,
-                proxyIp   = proxyIp,
-                country   = country,
-            )
+        // Suspend until WebCapture finishes (onWebCaptureDone / onWebCaptureError)
+        withTimeoutOrNull(3 * 60 * 1_000L) { done.await() } ?: run {
+            Log.w("TopSearch", "processSocketRequest TIMEOUT '$kw' — dispatching empty and moving on")
+            currentDone = null
+            SearchBridge.dispatchResult(req.requestId, emptyList(), publicIp = proxyIp)
+            _state.value = SearchState.Idle
+            val suffix = if (pendingQueueCount > 0) " — $pendingQueueCount keyword đang chờ" else ""
+            _socketInfo.value = "Hết giờ: \"$kw\"$suffix"
         }
+    }
+
+    private fun signalDone() {
+        currentDone?.complete(Unit)
+        currentDone = null
     }
 
     fun startSearch(
@@ -148,6 +178,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 _state.value = SearchState.Done(keyword, jsResults, firstPath, city, proxyIp)
                 uploadAsync(screenshotPaths)
             }
+            signalDone()
             return
         }
         if (screenshotPaths.isEmpty()) {
@@ -156,6 +187,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 SearchBridge.dispatchResult(reqId, emptyList(), publicIp = proxyIp)
                 showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
             }
+            signalDone()
             return
         }
         _state.value = SearchState.Analyzing(keyword)
@@ -177,6 +209,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                     showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
                 }
             }
+            signalDone()
         }
     }
 
@@ -191,6 +224,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         } else {
             _state.value = SearchState.Error(error, keyword)
         }
+        signalDone()
     }
 
     fun reset() {
