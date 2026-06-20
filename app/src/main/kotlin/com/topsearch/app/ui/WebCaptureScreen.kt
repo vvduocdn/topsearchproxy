@@ -320,9 +320,11 @@ fun WebCaptureScreen(
             }
             if (!ok) Log.w(TAG, "Proxy set failed")
         }
-        wv.loadUrl(url, mapOf(
-            "Accept-Language" to "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
-        ))
+        val acceptLanguage = if (url.contains("google.co.th"))
+            "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7"
+        else
+            "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+        wv.loadUrl(url, mapOf("Accept-Language" to acceptLanguage))
     }
 
     // Dọn dẹp khi rời màn hình
