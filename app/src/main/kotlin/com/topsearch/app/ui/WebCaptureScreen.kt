@@ -774,7 +774,7 @@ private fun parseJsResults(raw: String): List<SearchResult> {
  * Dùng window.innerHeight (CSS px) làm bước scroll — KHÔNG dùng webView.height (physical px).
  */
 private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<String> {
-    val w       = webView.width.takeIf  { it > 0 } ?: 1080
+    val w       = webView.width.takeIf { it > 0 } ?: 1080
     val viewHPx = webView.height.takeIf { it > 0 } ?: 1920
     val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
     val base    = dir ?: File("/sdcard")
@@ -788,68 +788,77 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<Stri
     webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
     delay(400)
 
-    val cssViewH = suspendCancellableCoroutine<Int> { cont ->
-        webView.evaluateJavascript("window.innerHeight") { r ->
-            cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: (viewHPx / 3))
+    // Lấy cả viewport height lẫn tổng chiều cao trang (CSS px) trong 1 lần gọi
+    val (cssViewH, cssPageH) = suspendCancellableCoroutine<Pair<Int, Int>> { cont ->
+        webView.evaluateJavascript("[window.innerHeight,document.documentElement.scrollHeight]") { r ->
+            try {
+                val arr = JSONArray(r?.trim() ?: "[]")
+                cont.resume(Pair(arr.optInt(0, viewHPx / 3), arr.optInt(1, viewHPx / 3)))
+            } catch (e: Exception) {
+                cont.resume(Pair(viewHPx / 3, viewHPx / 3))
+            }
         }
     }
-    Log.d(TAG, "captureFullPage: viewHPx=$viewHPx cssViewH=$cssViewH")
 
-    // Thu thập các tile bitmap trong memory
-    val tiles       = mutableListOf<Bitmap>()
-    var offsetY     = 0
+    // dpr = tỷ lệ pixel vật lý / CSS pixel
+    val dpr        = if (cssViewH > 0) viewHPx.toFloat() / cssViewH else 1f
+    val totalPhysH = (cssPageH * dpr).toInt().coerceIn(1, 16_000)
+    Log.d(TAG, "captureFullPage: viewHPx=$viewHPx cssViewH=$cssViewH cssPageH=$cssPageH dpr=$dpr totalPhysH=$totalPhysH")
+
+    val full    = Bitmap.createBitmap(w, totalPhysH, Bitmap.Config.RGB_565)
+    val canvas  = Canvas(full)
+    val tileBmp = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.RGB_565)
+
+    var offsetCss   = 0
     var prevActualY = -1
     var idx         = 0
 
     while (idx < 20) {
-        webView.evaluateJavascript("window.scrollTo({top:$offsetY,behavior:'instant'});", null)
-        delay(500)
+        webView.evaluateJavascript("window.scrollTo({top:$offsetCss,behavior:'instant'});", null)
+        delay(400)
 
         val actualY = suspendCancellableCoroutine<Int> { cont ->
             webView.evaluateJavascript("window.pageYOffset") { r ->
-                cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: offsetY)
+                cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: offsetCss)
             }
         }
+        // Browser đã clamp về vị trí cũ → đã chụp hết trang
         if (actualY == prevActualY) break
-        delay(100)
 
-        val bmp = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.RGB_565)
         if (window != null) {
             suspendCancellableCoroutine<Unit> { cont ->
-                PixelCopy.request(window, srcRect, bmp, { result ->
+                PixelCopy.request(window, srcRect, tileBmp, { result ->
                     if (result != PixelCopy.SUCCESS) Log.w(TAG, "PixelCopy failed result=$result idx=$idx")
                     cont.resume(Unit)
                 }, Handler(Looper.getMainLooper()))
             }
         } else {
-            bmp.eraseColor(android.graphics.Color.WHITE)
-            webView.draw(Canvas(bmp))
+            tileBmp.eraseColor(android.graphics.Color.WHITE)
+            webView.draw(Canvas(tileBmp))
         }
 
-        tiles.add(bmp)
+        // Vẽ tile tại đúng vị trí pixel tương ứng actualY — không dùng i*viewHPx
+        // Nhờ vậy tile cuối (bị browser clamp) sẽ đặt đúng chỗ, không bị lặp/hở
+        val drawTop = (actualY * dpr).toInt()
+        val drawH   = viewHPx.coerceAtMost(totalPhysH - drawTop)
+        if (drawTop < totalPhysH && drawH > 0) {
+            canvas.drawBitmap(tileBmp, Rect(0, 0, w, drawH), Rect(0, drawTop, w, drawTop + drawH), null)
+        }
+
         prevActualY = actualY
-        offsetY += cssViewH
+        offsetCss  += cssViewH
         idx++
     }
 
+    tileBmp.recycle()
     webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
 
-    if (tiles.isEmpty()) return emptyList()
-
-    // Ghép tất cả tiles thành 1 ảnh full page (tối đa 16000px để tránh OOM)
-    val totalH  = (tiles.size * viewHPx).coerceAtMost(16_000)
-    val full    = Bitmap.createBitmap(w, totalH, Bitmap.Config.RGB_565)
-    val canvas  = Canvas(full)
-    tiles.forEachIndexed { i, tile ->
-        val top = i * viewHPx
-        if (top < totalH) canvas.drawBitmap(tile, 0f, top.toFloat(), null)
-        tile.recycle()
-    }
+    if (idx == 0) { full.recycle(); return emptyList() }
 
     val file = File(base, "topsearch_${ts}_full.jpg")
     FileOutputStream(file).use { full.compress(Bitmap.CompressFormat.JPEG, 82, it) }
     full.recycle()
 
-    Log.d(TAG, "Full page saved: ${file.name} (${tiles.size} tiles → 1 image, totalH=$totalH)")
+    Log.d(TAG, "Full page saved: ${file.name} ($idx tiles dpr=$dpr totalPhysH=$totalPhysH)")
     return listOf(file.absolutePath)
 }
