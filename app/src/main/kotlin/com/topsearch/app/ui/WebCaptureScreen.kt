@@ -287,6 +287,9 @@ fun WebCaptureScreen(
     var webViewRef     by remember { mutableStateOf<WebView?>(null) }
     // true khi proxy fail → đã fallback về UULE-only (tránh retry loop)
     var proxyFallback  by remember { mutableStateOf(false) }
+    // URL của trang CAPTCHA — set để trigger LaunchedEffect giải
+    var captchaPageUrl   by remember { mutableStateOf("") }
+    var captchaRetryCount by remember { mutableIntStateOf(0) }
     // LocalProxyServer — chỉ tạo khi proxy có auth (tự thêm Proxy-Authorization header)
     val localProxy     = remember<LocalProxyServer?> {
         val info = ProxyHelper.parse(proxyHost)
@@ -324,7 +327,63 @@ fun WebCaptureScreen(
             "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7"
         else
             "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+        Log.d(TAG, "▶ loadUrl keyword='$keyword' url=$url Accept-Language=$acceptLanguage")
         wv.loadUrl(url, mapOf("Accept-Language" to acceptLanguage))
+    }
+
+    // Giải CAPTCHA khi Google hiện trang /sorry/
+    LaunchedEffect(captchaPageUrl) {
+        if (captchaPageUrl.isBlank()) return@LaunchedEffect
+        val wv = webViewRef ?: return@LaunchedEffect
+
+        captchaRetryCount++
+        val attempt = captchaRetryCount
+        statusText = "Đang giải CAPTCHA… (lần $attempt)"
+        Log.w(TAG, "═══ CAPTCHA START attempt=$attempt url=$captchaPageUrl ═══")
+
+        // Chờ iframe reCAPTCHA load xong
+        delay(2_000)
+
+        // Dump DOM để debug
+        val domInfo = suspendCancellableCoroutine { cont ->
+            wv.evaluateJavascript("""
+                (function(){
+                    var el = document.querySelector('[data-sitekey]');
+                    var cb = document.querySelector('[data-callback]');
+                    var ds = document.querySelector('[data-s]');
+                    return JSON.stringify({
+                        sitekey:  el  ? el.getAttribute('data-sitekey')  : '',
+                        callback: cb  ? cb.getAttribute('data-callback') : '',
+                        dataS:    ds  ? ds.getAttribute('data-s')        : '',
+                        hasForm:  !!document.querySelector('form'),
+                        bodySnip: (document.body ? document.body.innerText : '').substring(0,100)
+                    });
+                })()
+            """.trimIndent()) { r -> cont.resume((r ?: "null").trim().removeSurrounding("\"").replace("\\\"","\"")) }
+        }
+        Log.w(TAG, "CAPTCHA DOM → $domInfo")
+
+        val domObj = try { org.json.JSONObject(domInfo) } catch (_: Exception) { org.json.JSONObject() }
+        val siteKey = domObj.optString("sitekey")
+        val dataS   = domObj.optString("dataS")
+        Log.w(TAG, "CAPTCHA siteKey='$siteKey' dataS=${dataS.take(20)}")
+
+        // Dùng cùng proxy với WebView để Google chấp nhận token
+        val proxyInfo = if (proxyHost.isNotBlank()) com.topsearch.app.ProxyHelper.parse(proxyHost) else null
+
+        val token = com.topsearch.app.CapSolverHelper.solve(captchaPageUrl, siteKey, dataS, proxyInfo)
+        if (token == null) {
+            Log.e(TAG, "CAPTCHA solve FAILED — CapSolver trả null")
+            onError("Không giải được CAPTCHA — thử lại")
+            captchaPageUrl = ""
+            return@LaunchedEffect
+        }
+
+        Log.w(TAG, "CAPTCHA token nhận được length=${token.length}")
+        wv.evaluateJavascript(buildCaptchaSubmitJs(token)) { r ->
+            Log.w(TAG, "CAPTCHA inject result=$r")
+        }
+        captchaPageUrl = ""
     }
 
     // Dọn dẹp khi rời màn hình
@@ -453,6 +512,7 @@ fun WebCaptureScreen(
                         private var done = false
 
                         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                            Log.d(TAG, "onPageStarted url=$url")
                             // Inject TRƯỚC khi trang render để Google thấy vị trí giả
                             if (spoofLat != 0.0 && spoofLng != 0.0) {
                                 view.evaluateJavascript(buildSpoofLocationJs(spoofLat, spoofLng), null)
@@ -460,15 +520,31 @@ fun WebCaptureScreen(
                         }
 
                         override fun onPageFinished(view: WebView, url: String) {
+                            Log.d(TAG, "onPageFinished url=$url done=$done")
                             if (spoofLat != 0.0 && spoofLng != 0.0) {
                                 view.evaluateJavascript(buildSpoofLocationJs(spoofLat, spoofLng), null)
                             }
                             if (done) return
+                            // Detect CAPTCHA (Google sorry page)
+                            if (url.contains("/sorry/") || url.contains("recaptcha.google.com")) {
+                                if (captchaRetryCount >= 3) {
+                                    Log.e(TAG, "CAPTCHA: max retries (3) reached, proxy bị block")
+                                    onError("Proxy bị Google block CAPTCHA — thử proxy khác")
+                                    return
+                                }
+                                Log.w(TAG, "CAPTCHA detected → $url")
+                                captchaPageUrl = url
+                                return
+                            }
                             if (keyword.isNotBlank() && !url.contains("/search")) {
                                 // Phase 1: homepage loaded → inject keyword and submit
-                                view.evaluateJavascript(buildSearchJs(keyword), null)
+                                Log.d(TAG, "Phase 1 → homepage detected, inject keyword='$keyword'")
+                                view.evaluateJavascript(buildSearchJs(keyword)) { result ->
+                                    Log.d(TAG, "Phase 1 inject result=$result")
+                                }
                             } else {
                                 // Phase 2: results page (or direct URL) → trigger extraction
+                                Log.d(TAG, "Phase 2 → results page detected, trigger extraction")
                                 done = true
                                 pageLoaded = true
                             }
@@ -496,13 +572,27 @@ fun WebCaptureScreen(
         )
 
         if (!capturing) {
-            Box(
-                modifier         = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = if (pageLoaded) 0.50f else 0.70f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (!pageLoaded) {
+            if (captchaPageUrl.isNotBlank()) {
+                // CAPTCHA đang giải — ẩn overlay, hiện trạng thái nhỏ ở trên
+                Box(
+                    modifier         = Modifier
+                        .fillMaxSize()
+                        .padding(top = 12.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    Text(statusText, color = Color.White, fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier  = Modifier
+                            .background(Color.Black.copy(alpha = 0.60f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 16.dp, vertical = 6.dp))
+                }
+            } else if (!pageLoaded) {
+                Box(
+                    modifier         = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.70f)),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp)
                         Spacer(Modifier.height(16.dp))
@@ -510,7 +600,12 @@ fun WebCaptureScreen(
                             color = Color.White, fontSize = 16.sp,
                             textAlign = TextAlign.Center)
                     }
-                } else {
+                }
+            } else {
+                Box(
+                    modifier         = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
                     CountdownOverlay(countdown, statusText)
                 }
             }
@@ -527,10 +622,6 @@ private fun CountdownOverlay(countdown: Int, statusText: String) {
     )
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color.Black.copy(alpha = 0.70f))
-            .padding(horizontal = 36.dp, vertical = 28.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
             CircularProgressIndicator(
@@ -542,10 +633,6 @@ private fun CountdownOverlay(countdown: Int, statusText: String) {
                 trackColor  = Color.White.copy(alpha = 0.2f),
             )
             Box(
-                modifier         = Modifier
-                    .size(64.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Text("$countdown", fontSize = 28.sp,
@@ -575,6 +662,50 @@ private fun buildSearchJs(keyword: String): String {
         if (form) { form.submit(); return true; }
         return false;
     })()
+    """.trimIndent()
+}
+
+private fun buildCaptchaSubmitJs(token: String): String {
+    val escaped = token.replace("'", "\\'")
+    return """
+    (function(token) {
+        // 1. Điền vào textarea response
+        document.querySelectorAll('textarea[name="g-recaptcha-response"]').forEach(function(el) {
+            el.value = token;
+        });
+        var r = document.getElementById('g-recaptcha-response');
+        if (r) r.value = token;
+
+        // 2. Gọi data-callback trực tiếp (Google sorry dùng "cr")
+        var widget = document.querySelector('[data-callback]');
+        if (widget) {
+            var fnName = widget.getAttribute('data-callback');
+            if (fnName && typeof window[fnName] === 'function') {
+                window[fnName](token);
+                return 'called:' + fnName;
+            }
+        }
+
+        // 3. Fallback: walk ___grecaptcha_cfg
+        try {
+            var cfg = window.___grecaptcha_cfg;
+            if (cfg && cfg.clients) {
+                (function walk(obj, depth) {
+                    if (!obj || typeof obj !== 'object' || depth > 6) return;
+                    if (typeof obj.callback === 'function') { obj.callback(token); return; }
+                    Object.keys(obj).forEach(function(k) { walk(obj[k], depth + 1); });
+                })(cfg.clients, 0);
+            }
+        } catch(e) {}
+
+        // 4. Submit form
+        var form = document.querySelector('form#captcha-form') || document.querySelector('form');
+        if (form) {
+            setTimeout(function() { form.submit(); }, 300);
+            return 'submitted';
+        }
+        return 'no-form';
+    })('$escaped')
     """.trimIndent()
 }
 
@@ -618,33 +749,35 @@ private fun parseJsResults(raw: String): List<SearchResult> {
             } else s
         }
         val arr = JSONArray(json)
-        (0 until arr.length()).map { i ->
-            val obj = arr.getJSONObject(i)
+        var rank = 0
+        (0 until arr.length()).mapNotNull { i ->
+            val obj   = arr.getJSONObject(i)
+            val isAd  = obj.optBoolean("ad", false)
+            val title = obj.optString("t", "").trim()
+            if (isAd || title.isBlank()) return@mapNotNull null
+            rank++
             SearchResult(
-                rank   = i + 1,
-                title  = obj.optString("t", "").trim(),
+                rank   = rank,
+                title  = title,
                 domain = obj.optString("d", "").trim(),
                 url    = obj.optString("u", "").trim(),
-                isAd   = obj.optBoolean("ad", false),
+                isAd   = false,
             )
-        }.filter { it.title.isNotBlank() }
+        }
     } catch (_: Exception) {
         emptyList()
     }
 }
 
 /**
- * Scroll từ top → footer, chụp từng viewport bằng PixelCopy.
- * Dùng window.innerHeight (CSS px) làm bước scroll — KHÔNG dùng webView.height (physical px)
- * vì window.scrollTo nhận CSS pixels; trên thiết bị density=3 nếu dùng physical px sẽ nhảy
- * 3 viewport một bước, bỏ qua hoàn toàn các tile giữa trang.
+ * Scroll từ top → footer, chụp từng viewport bằng PixelCopy rồi ghép thành 1 ảnh full page.
+ * Dùng window.innerHeight (CSS px) làm bước scroll — KHÔNG dùng webView.height (physical px).
  */
 private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<String> {
     val w       = webView.width.takeIf  { it > 0 } ?: 1080
-    val viewHPx = webView.height.takeIf { it > 0 } ?: 1920  // physical px — cho PixelCopy
+    val viewHPx = webView.height.takeIf { it > 0 } ?: 1920
     val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
     val base    = dir ?: File("/sdcard")
-    val paths   = mutableListOf<String>()
 
     val window = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         (webView.context as? Activity)?.window
@@ -655,14 +788,15 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<Stri
     webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
     delay(400)
 
-    // Lấy CSS viewport height — đây là đơn vị window.scrollTo dùng
     val cssViewH = suspendCancellableCoroutine<Int> { cont ->
         webView.evaluateJavascript("window.innerHeight") { r ->
             cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: (viewHPx / 3))
         }
     }
-    Log.d(TAG, "captureWebViewTiles: viewHPx=$viewHPx cssViewH=$cssViewH")
+    Log.d(TAG, "captureFullPage: viewHPx=$viewHPx cssViewH=$cssViewH")
 
+    // Thu thập các tile bitmap trong memory
+    val tiles       = mutableListOf<Bitmap>()
     var offsetY     = 0
     var prevActualY = -1
     var idx         = 0
@@ -676,37 +810,46 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<Stri
                 cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: offsetY)
             }
         }
-
         if (actualY == prevActualY) break
-
         delay(100)
 
-        val file = File(base, "topsearch_${ts}_$idx.jpg")
+        val bmp = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.RGB_565)
         if (window != null) {
-            val bmp = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.ARGB_8888)
             suspendCancellableCoroutine<Unit> { cont ->
                 PixelCopy.request(window, srcRect, bmp, { result ->
                     if (result != PixelCopy.SUCCESS) Log.w(TAG, "PixelCopy failed result=$result idx=$idx")
                     cont.resume(Unit)
                 }, Handler(Looper.getMainLooper()))
             }
-            FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }
-            bmp.recycle()
         } else {
-            val tile = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.ARGB_8888)
-            tile.eraseColor(android.graphics.Color.WHITE)
-            webView.draw(Canvas(tile))
-            FileOutputStream(file).use { tile.compress(Bitmap.CompressFormat.JPEG, 85, it) }
-            tile.recycle()
+            bmp.eraseColor(android.graphics.Color.WHITE)
+            webView.draw(Canvas(bmp))
         }
 
-        paths.add(file.absolutePath)
+        tiles.add(bmp)
         prevActualY = actualY
-        offsetY += cssViewH  // CSS px — mỗi bước đúng 1 viewport
+        offsetY += cssViewH
         idx++
     }
 
     webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
-    Log.d(TAG, "Captured ${paths.size} tile(s), cssViewH=$cssViewH")
-    return paths
+
+    if (tiles.isEmpty()) return emptyList()
+
+    // Ghép tất cả tiles thành 1 ảnh full page (tối đa 16000px để tránh OOM)
+    val totalH  = (tiles.size * viewHPx).coerceAtMost(16_000)
+    val full    = Bitmap.createBitmap(w, totalH, Bitmap.Config.RGB_565)
+    val canvas  = Canvas(full)
+    tiles.forEachIndexed { i, tile ->
+        val top = i * viewHPx
+        if (top < totalH) canvas.drawBitmap(tile, 0f, top.toFloat(), null)
+        tile.recycle()
+    }
+
+    val file = File(base, "topsearch_${ts}_full.jpg")
+    FileOutputStream(file).use { full.compress(Bitmap.CompressFormat.JPEG, 82, it) }
+    full.recycle()
+
+    Log.d(TAG, "Full page saved: ${file.name} (${tiles.size} tiles → 1 image, totalH=$totalH)")
+    return listOf(file.absolutePath)
 }

@@ -67,11 +67,15 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         socketRequestId = requestId
 
         val effectiveProxy = if (_skipProxy.value) "" else proxy
+        Log.d("TopSearch", "startSearchFromSocket: kw='$kw' proxy='$proxy' skipProxy=${_skipProxy.value} effective='$effectiveProxy' country=$country")
+        if (effectiveProxy.isBlank()) {
+            Log.w("TopSearch", "startSearchFromSocket: NO PROXY — searching without proxy (server sent='$proxy' skipProxy=${_skipProxy.value})")
+        }
         _socketInfo.value = "Nhận keyword từ server: \"$kw\""
 
         viewModelScope.launch {
             val proxyIp = if (effectiveProxy.isNotBlank()) {
-                withTimeoutOrNull(4000L) {
+                withTimeoutOrNull(8000L) {
                     runCatching { resolveIpViaProxy(effectiveProxy) }.getOrElse { "" }
                 } ?: ""
             } else ""
@@ -243,27 +247,27 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
         suspend fun resolveIpViaProxy(proxyHostPort: String): String = withContext(Dispatchers.IO) {
             try {
-                val parts      = proxyHostPort.split(":")
-                val host       = parts[0]
-                val port       = parts[1].toInt()
-                val user       = parts[2]
-                val pass       = parts[3]
-                val credential = Credentials.basic(user, pass)
-                val client     = OkHttpClient.Builder()
-                    .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)))
-                    .proxyAuthenticator { _, response ->
-                        // Respond to 407 Proxy Authentication Required
+                val info = ProxyHelper.parse(proxyHostPort) ?: run {
+                    Log.w("TopSearch", "resolveIpViaProxy: invalid proxy format '$proxyHostPort'")
+                    return@withContext ""
+                }
+                val builder = OkHttpClient.Builder()
+                    .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(info.host, info.port)))
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                if (info.requiresAuth) {
+                    val credential = Credentials.basic(info.user, info.pass)
+                    builder.proxyAuthenticator { _, response ->
                         response.request.newBuilder()
                             .header("Proxy-Authorization", credential)
                             .build()
                     }
-                    .connectTimeout(5, TimeUnit.SECONDS)
-                    .readTimeout(5, TimeUnit.SECONDS)
-                    .build()
+                }
+                val client  = builder.build()
                 val request = Request.Builder().url("https://api64.ipify.org?format=json").build()
-                val body = client.newCall(request).execute().use { it.body?.string()?.trim() ?: "" }
-                val ip = org.json.JSONObject(body).optString("ip", "")
-                Log.d("TopSearch", "resolveIpViaProxy OK → $ip")
+                val body    = client.newCall(request).execute().use { it.body?.string()?.trim() ?: "" }
+                val ip      = org.json.JSONObject(body).optString("ip", "")
+                Log.d("TopSearch", "resolveIpViaProxy OK → $ip (proxy=${info.host}:${info.port} auth=${info.requiresAuth})")
                 ip
             } catch (e: Exception) {
                 Log.w("TopSearch", "resolveIpViaProxy failed: ${e.message}")

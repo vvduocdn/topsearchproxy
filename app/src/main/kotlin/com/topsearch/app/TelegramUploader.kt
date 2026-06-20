@@ -25,7 +25,7 @@ object TelegramUploader {
         if (!file.exists()) { Log.e(TAG, "File not found: $filePath"); return "" }
         Log.d(TAG, "upload: ${file.name}  size=${file.length()}B")
         return try {
-            val fileId = sendPhoto(file) ?: return ""
+            val fileId = sendDocument(file) ?: return ""
             Log.d(TAG, "  file_id = $fileId")
             val tgPath = getFilePath(fileId) ?: return ""
             Log.d(TAG, "  tg_path = $tgPath")
@@ -38,19 +38,20 @@ object TelegramUploader {
         }
     }
 
-    private fun sendPhoto(file: File): String? {
+    // sendDocument thay vì sendPhoto — không có giới hạn dimensions, hỗ trợ ảnh full page cao
+    private fun sendDocument(file: File): String? {
         val boundary = "TgBound${System.currentTimeMillis()}"
-        val conn = (URL("$BOT_BASE/sendPhoto").openConnection() as HttpURLConnection).apply {
+        val conn = (URL("$BOT_BASE/sendDocument").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput       = true
             connectTimeout = 15_000
-            readTimeout    = 30_000
+            readTimeout    = 60_000
             setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
         }
 
         conn.outputStream.use { out ->
             out.write("--$boundary\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n$CHAT_ID\r\n".toByteArray())
-            out.write("--$boundary\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"${file.name}\"\r\nContent-Type: image/jpeg\r\n\r\n".toByteArray())
+            out.write("--$boundary\r\nContent-Disposition: form-data; name=\"document\"; filename=\"${file.name}\"\r\nContent-Type: image/jpeg\r\n\r\n".toByteArray())
             file.inputStream().use { it.copyTo(out) }
             out.write("\r\n--$boundary--\r\n".toByteArray())
         }
@@ -58,12 +59,11 @@ object TelegramUploader {
         val code = conn.responseCode
         val body = if (code == 200) conn.inputStream.bufferedReader().readText()
                    else conn.errorStream?.bufferedReader()?.readText() ?: ""
-        Log.d(TAG, "  sendPhoto HTTP $code body_len=${body.length}")
+        Log.d(TAG, "  sendDocument HTTP $code body_len=${body.length}")
         val json = JSONObject(body)
-        if (!json.optBoolean("ok")) { Log.e(TAG, "sendPhoto($code): $body"); return null }
+        if (!json.optBoolean("ok")) { Log.e(TAG, "sendDocument($code): $body"); return null }
 
-        val photos = json.getJSONObject("result").getJSONArray("photo")
-        return photos.getJSONObject(photos.length() - 1).getString("file_id")
+        return json.getJSONObject("result").getJSONObject("document").getString("file_id")
     }
 
     private fun getFilePath(fileId: String): String? {
