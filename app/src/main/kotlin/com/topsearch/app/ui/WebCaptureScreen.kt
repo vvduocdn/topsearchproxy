@@ -111,15 +111,13 @@ private val WAIT_READY_JS = """
 """.trimIndent()
 
 /**
- * Từ debug thực tế trên Samsung S22:
- *   - Link kết quả organic: a.UBFage
- *   - Link quảng cáo: href chứa "/aclk?" hoặc nằm trong #tads / [data-text-ad]
- *   - innerText của a.UBFage: dòng 0=domain, dòng 1=url, dòng 2+=title
+ * Trích xuất KẾT QUẢ ORGANIC từ Google Search — không tính ads, PAA, Knowledge Panel.
  *
- * isAd detection:
- *   1. href chứa "/aclk?" → Google Ads click tracking URL
- *   2. ancestor là #tads, [data-text-ad], .uEierd, .pla-unit
- *   3. Có element "Quảng cáo" / "Ad" / "Sponsored" gần đó
+ * Phương pháp chính: tìm h3 trong #rso, bỏ qua các section không phải organic.
+ * PAA / KP / Ads đều bị loại qua exclusion list.
+ * h3 trong PAA thường không có external link → tự bị lọc ra.
+ *
+ * Fallback: a.UBFage nếu h3 tìm được < 5 kết quả.
  */
 private val EXTRACT_JS = """
 (function() {
@@ -128,105 +126,103 @@ private val EXTRACT_JS = """
         var seen       = {};
         var seenDomain = {};
 
-        function isAdElement(el) {
-            // Cách 1: href là Google Ads click URL (/aclk?)
+        var EXCLUDE = [
+            '#tads', '#tadsb',
+            '[data-text-ad]', '.uEierd', '.pla-unit',
+            '.related-question-pair', '.g-blk', '.ifM9O', '.qxDOhb',
+            '.kp-wholepage', '.osrp-blk', '.I6TXqe',
+            '[aria-label="Ads"]'
+        ];
+
+        function isExcluded(el) {
+            if (!el || !el.closest) return false;
+            for (var i = 0; i < EXCLUDE.length; i++) {
+                if (el.closest(EXCLUDE[i])) return true;
+            }
+            return false;
+        }
+
+        function isAdLink(el) {
             var href = el.href || '';
             if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) return true;
-
-            // Cách 2: nằm trong container quảng cáo
-            var adSelectors = ['#tads','#tadsb','[data-text-ad]','.uEierd','.pla-unit','[aria-label="Ads"]'];
-            for (var i = 0; i < adSelectors.length; i++) {
-                if (el.closest && el.closest(adSelectors[i])) return true;
-            }
-
-            // Cách 3: favicon là quả cầu (globe) — Google dùng cho ads khi không có favicon thật
-            // Globe icon: img src chứa "globe" hoặc là svg có viewBox="0 0 24 24" với path đặc trưng
-            var block = el.closest ? (el.closest('[data-hveid]') || el.closest('[data-ved]') || el.parentElement) : el.parentElement;
+            var block = el.closest ? (el.closest('[data-hveid]') || el.parentElement) : el.parentElement;
             if (block) {
-                var imgs = block.querySelectorAll('img');
-                for (var k = 0; k < imgs.length; k++) {
-                    var src = imgs[k].src || imgs[k].getAttribute('src') || '';
-                    // Globe icon Google dùng cho ads: gds-vector-globe hoặc encrypted-tbn
-                    if (src.indexOf('globe') >= 0 || src.indexOf('gds-vector') >= 0) return true;
-                    // Generic favicon placeholder (1x1 pixel base64)
-                    if (src.indexOf('1x1') >= 0 || src === '') {
-                        // Nếu không có favicon thật → khả năng là ads
-                    }
-                }
-                // SVG globe (Google render bằng SVG inline)
-                var svgs = block.querySelectorAll('svg');
-                for (var m = 0; m < svgs.length; m++) {
-                    var svgClass = svgs[m].className || '';
-                    if (typeof svgClass === 'object') svgClass = svgClass.baseVal || '';
-                    if (svgClass.indexOf('globe') >= 0 || svgClass.indexOf('XNo5Ab') >= 0) return true;
-                }
-
-                // Cách 4: text "Quảng cáo" / "Sponsored" trong block
-                var blockText = (block.innerText || block.textContent || '').toLowerCase();
-                var adLabels  = ['quảng cáo', 'sponsored', '·ad·', '· ad ·', 'được tài trợ'];
-                for (var n = 0; n < adLabels.length; n++) {
-                    if (blockText.indexOf(adLabels[n]) >= 0) return true;
+                var txt = (block.innerText || block.textContent || '').toLowerCase();
+                var ads = ['quảng cáo', 'sponsored', 'được tài trợ'];
+                for (var n = 0; n < ads.length; n++) {
+                    if (txt.indexOf(ads[n]) >= 0) return true;
                 }
             }
             return false;
         }
 
-        // ── a.UBFage = link kết quả chính (organic + ads đều dùng) ──────
-        var links = document.querySelectorAll('a.UBFage');
-
-        for (var i = 0; i < links.length && out.length < 15; i++) {
-            var a    = links[i];
-            var text = (a.innerText || a.textContent || '').trim();
-            if (!text) continue;
-
-            var lines = text.split('\n')
-                            .map(function(l) { return l.trim(); })
-                            .filter(function(l) { return l.length > 0; });
-            if (lines.length < 2) continue;
-
-            var title = lines.length >= 3
-                ? lines.slice(2).join(' ').trim()
-                : lines[lines.length - 1].trim();
-            if (!title || title.length < 3 || seen[title]) continue;
-
-            var domain = '';
-            var href   = a.href || '';
-            // Ads dùng /aclk? redirect → lấy domain từ display text (dòng 0)
-            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) {
-                domain = lines[0].replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim();
-            } else {
-                try { domain = new URL(href).hostname.replace(/^www\./, ''); } catch(e) {}
-            }
-
-            if (domain && seenDomain[domain]) continue;
-
-            seen[title] = true;
-            if (domain) seenDomain[domain] = true;
-
-            out.push({ t: title, d: domain, u: href, ad: isAdElement(a) });
+        function getDomain(href) {
+            try { return new URL(href).hostname.replace(/^www\./, ''); } catch(e) { return ''; }
         }
 
-        // ── Fallback: div[role="heading"] nếu không tìm được qua UBFage ─
-        if (out.length === 0) {
-            var headings = document.querySelectorAll('div.F0FGWb, [role="heading"]');
-            for (var k = 0; k < headings.length && out.length < 15; k++) {
-                var hd = headings[k];
-                var t2 = (hd.innerText || hd.textContent || '').trim();
-                if (!t2 || t2.length < 3 || t2.length > 120 || seen[t2]) continue;
-                seen[t2] = true;
-                var blk  = hd.closest ? (hd.closest('[data-hveid]') || hd.parentElement) : hd.parentElement;
-                var aTag = blk ? blk.querySelector('a.UBFage, a[href^="http"]') : null;
-                var d2   = '', u2 = '';
-                if (aTag) {
-                    u2 = aTag.href;
-                    try { d2 = new URL(u2).hostname.replace(/^www\./, ''); } catch(e) {}
+        function tryAdd(title, aTag) {
+            if (!title || title.length < 3 || title.length > 200 || seen[title]) return false;
+            if (!aTag) return false;
+            var href = aTag.href || '';
+            if (!href || href.indexOf('http') !== 0) return false;
+            if (isAdLink(aTag) || isExcluded(aTag)) return false;
+            var d = getDomain(href);
+            if (!d || d.indexOf('google.') >= 0 || seenDomain[d]) return false;
+            seen[title]   = true;
+            seenDomain[d] = true;
+            out.push({ t: title, d: d, u: href, ad: false });
+            return true;
+        }
+
+        var searchRoot = document.querySelector('#rso, #search') || document.body;
+
+        // ── Strategy 1: h3 trong search results, loại exclusion section ──────
+        var h3s = searchRoot.querySelectorAll('h3');
+        for (var i = 0; i < h3s.length && out.length < 20; i++) {
+            var h3 = h3s[i];
+            if (isExcluded(h3)) continue;
+
+            var title = (h3.innerText || h3.textContent || '').trim();
+            if (!title || title.length < 3 || title.length > 200 || seen[title]) continue;
+
+            // Tìm link: trong h3, hoặc parent là <a>, hoặc leo lên tối đa 6 cấp
+            var aTag = h3.querySelector('a[href]');
+            if (!aTag) {
+                var par = h3.parentElement;
+                if (par && par.tagName === 'A' && par.href) {
+                    aTag = par;
+                } else {
+                    for (var p = 0; p < 6 && par; p++) {
+                        var c = par.querySelector('a[href^="http"]');
+                        if (c && !isExcluded(c)) { aTag = c; break; }
+                        par = par.parentElement;
+                    }
                 }
-                if (d2) out.push({ t: t2, d: d2, u: u2, ad: aTag ? isAdElement(aTag) : false });
+            }
+            tryAdd(title, aTag);
+        }
+
+        // ── Strategy 2: a.UBFage (fallback nếu h3 tìm được < 5) ─────────────
+        if (out.length < 5) {
+            var links = document.querySelectorAll('a.UBFage');
+            for (var j = 0; j < links.length && out.length < 20; j++) {
+                var a = links[j];
+                if (isExcluded(a) || isAdLink(a)) continue;
+                var text = (a.innerText || a.textContent || '').trim();
+                if (!text) continue;
+                var lines = text.split('\n')
+                                .map(function(l) { return l.trim(); })
+                                .filter(function(l) { return l.length > 0; });
+                if (lines.length < 2) continue;
+                var t2 = lines.length >= 3
+                    ? lines.slice(2).join(' ').trim()
+                    : lines[lines.length - 1].trim();
+                tryAdd(t2, a);
             }
         }
 
         return JSON.stringify(out);
-    } catch (e) {
+    } catch(e) {
         return JSON.stringify([{ t: 'ERROR:' + e.message, d: '', u: '', ad: false }]);
     }
 })()
@@ -421,12 +417,13 @@ fun WebCaptureScreen(
         // ── Bước 3: Scroll từng bước trong countdown ─────────────────────
         for (i in COUNTDOWN_SEC downTo 1) {
             countdown  = i
-            val scrollY = (COUNTDOWN_SEC - i) * 1500
-            wv.evaluateJavascript("window.scrollTo({top:$scrollY,behavior:'instant'});", null)
+            val scrollY = (COUNTDOWN_SEC - i) * 600
+            wv.evaluateJavascript("window.scrollTo({top:$scrollY,behavior:'smooth'});", null)
             statusText = when {
-                i > 4 -> "Đang tải thêm kết quả…"
-                i > 2 -> "Gần xong…"
-                else  -> "Chuẩn bị phân tích…"
+                i > 10 -> "Đang tải kết quả…"
+                i > 5  -> "Đang cuộn xem kết quả…"
+                i > 2  -> "Gần xong…"
+                else   -> "Chuẩn bị phân tích…"
             }
             delay(1_000)
         }

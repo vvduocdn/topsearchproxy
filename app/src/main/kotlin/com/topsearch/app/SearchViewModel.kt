@@ -88,9 +88,19 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         _socketInfo.value = "Đang xử lý: \"$kw\"$queueSuffix"
 
         val proxyIp = if (effectiveProxy.isNotBlank()) {
-            withTimeoutOrNull(8_000L) {
-                runCatching { resolveIpViaProxy(effectiveProxy) }.getOrElse { "" }
-            } ?: ""
+            withTimeoutOrNull(12_000L) {
+                try {
+                    resolveIpViaProxy(effectiveProxy)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("TopSearch", "resolveIpViaProxy failed: ${e.message}")
+                    ""
+                }
+            } ?: run {
+                Log.w("TopSearch", "resolveIpViaProxy timeout (12s)")
+                ""
+            }
         } else ""
 
         val googleUrl = when (req.country) {
@@ -277,7 +287,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     }
 
     companion object {
-        const val COUNTDOWN_SEC = 5
+        const val COUNTDOWN_SEC = 15
 
         suspend fun resolveIpViaProxy(proxyHostPort: String): String = withContext(Dispatchers.IO) {
             try {
@@ -287,8 +297,8 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 }
                 val builder = OkHttpClient.Builder()
                     .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(info.host, info.port)))
-                    .connectTimeout(5, TimeUnit.SECONDS)
-                    .readTimeout(5, TimeUnit.SECONDS)
+                    .connectTimeout(4, TimeUnit.SECONDS)
+                    .readTimeout(4, TimeUnit.SECONDS)
                 if (info.requiresAuth) {
                     val credential = Credentials.basic(info.user, info.pass)
                     builder.proxyAuthenticator { _, response ->
