@@ -63,6 +63,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private var currentDone: CompletableDeferred<Unit>? = null
     private var pendingQueueCount = 0
 
+    // Cache kết quả theo keyword+country — tránh search lại cùng keyword
+    private val resultCache = mutableMapOf<String, List<SearchResult>>()
+    private fun cacheKey(keyword: String, country: Int) = "${keyword.trim().lowercase()}_$country"
+
     init {
         // Populate batch status list when server sends a new batch
         viewModelScope.launch {
@@ -114,6 +118,20 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 ""
             }
         } else ""
+
+        // Trả kết quả cache ngay nếu đã check keyword này trước đó
+        val cacheKey = cacheKey(kw, req.country)
+        val cachedResults = resultCache[cacheKey]
+        if (cachedResults != null) {
+            Log.d("TopSearch", "Cache HIT '$kw' country=${req.country} → ${cachedResults.size} results")
+            socketRequestId = null
+            updateBatchStatus(req.requestId, CheckStatus.DONE)
+            SearchBridge.dispatchResult(req.requestId, cachedResults, emptyList(), proxyIp)
+            val suffix = if (pendingQueueCount > 0) " (còn $pendingQueueCount đang chờ)" else ""
+            _socketInfo.value = "[Cache] \"$kw\" → ${cachedResults.size} kết quả$suffix"
+            _state.value = SearchState.Idle
+            return
+        }
 
         val googleUrl = when (req.country) {
             2    -> "https://www.google.co.th/?hl=th&gl=th&pws=0"
@@ -200,6 +218,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
         if (jsResults.isNotEmpty()) {
             Log.d("TopSearch", buildResultJson(keyword, city, jsResults))
+            resultCache[cacheKey(keyword, country)] = jsResults
             if (reqId != null) {
                 updateBatchStatus(reqId, CheckStatus.DONE)
                 SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp)
@@ -226,6 +245,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             try {
                 val results = OcrHelper.extractSearchResults(firstPath)
                 Log.d("TopSearch", buildResultJson(keyword, city, results))
+                if (results.isNotEmpty()) resultCache[cacheKey(keyword, country)] = results
                 if (reqId != null) {
                     updateBatchStatus(reqId, CheckStatus.DONE)
                     SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp)
