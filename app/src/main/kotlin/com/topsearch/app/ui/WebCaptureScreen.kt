@@ -379,7 +379,7 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
 
             var domain = getDomain(href);
             if (!domain) return false;
-            if (domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
+            if ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
 
             var title = candidate.title || titleFromCard(card, aTag);
             if (!title || title.length < 3 || title.length > 200) return false;
@@ -399,7 +399,7 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
             var href = resolveHref(a.href || '');
             if (!href || href.indexOf('http') !== 0) continue;
             var domain = getDomain(href);
-            if (!domain || domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
+            if (!domain || ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0)) continue;
             var card = findCard(a);
             candidates.push({ a: a, card: card, y: visualY(card || a) });
         }
@@ -562,7 +562,7 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 
             var domain = domainOf(href);
             if (!domain) continue;
-            if (domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
+            if ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
 
             candidates.push({ y: y, t: title, d: domain, u: canonicalHref(href) });
         }
@@ -578,7 +578,7 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 
             var linkDomain = domainOf(linkHref);
             if (!linkDomain) continue;
-            if (linkDomain.indexOf('google.') >= 0 || linkDomain.indexOf('gstatic.') >= 0 || linkDomain.indexOf('googleusercontent.') >= 0) continue;
+            if ((linkDomain.indexOf('google.') >= 0 && linkDomain.indexOf('play.google.') < 0) || linkDomain.indexOf('gstatic.') >= 0 || linkDomain.indexOf('googleusercontent.') >= 0) continue;
 
             var linkCard = findCard(link);
             if (isExcluded(linkCard) || hasSponsorLabel(linkCard)) continue;
@@ -739,7 +739,7 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
 
             var domain = getDomain(href);
             if (!domain) return false;
-            if (domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
+            if ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
 
             var title = candidate.title || titleFromCard(card, aTag);
             if (!title || title.length < 3 || title.length > 200) return false;
@@ -759,7 +759,7 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
             var href = resolveHref(a.href || '');
             if (!href || href.indexOf('http') !== 0) continue;
             var domain = getDomain(href);
-            if (!domain || domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
+            if (!domain || ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0)) continue;
             var card = findCard(a);
             var titleEl = titleElementForLink(a, card);
             var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
