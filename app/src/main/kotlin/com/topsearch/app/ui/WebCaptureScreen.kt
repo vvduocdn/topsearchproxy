@@ -66,6 +66,11 @@ private const val CHROME_UA =
     "AppleWebKit/537.36 (KHTML, like Gecko) " +
     "Chrome/124.0.0.0 Mobile Safari/537.36"
 
+private data class CaptureOutput(
+    val paths: List<String>,
+    val results: List<SearchResult>,
+)
+
 /** Dump trang để biết Google đang render cái gì */
 private val DEBUG_JS = """
 (function() {
@@ -113,8 +118,9 @@ private val DEBUG_JS = """
 private val WAIT_READY_JS = """
 (function() {
     var h3 = document.querySelectorAll('h3');
-    var g  = document.querySelectorAll('div.g, .yuRUbf, .LC20lb');
-    return (h3.length + g.length);
+    var heading = document.querySelectorAll('[role="heading"], .LC20lb');
+    var links = document.querySelectorAll('#search a[href], #rso a[href]');
+    return (h3.length + heading.length + links.length);
 })()
 """.trimIndent()
 
@@ -242,7 +248,538 @@ private val EXTRACT_JS = """
 })()
 """.trimIndent()
 
+/**
+ * Extract result theo visual order của DOM sau khi page đã scroll/render.
+ * Chỉ loại card quảng cáo có label "Nhà tài trợ" hoặc link ads; các organic/card còn lại giữ đủ.
+ */
+private val EXTRACT_VISUAL_RESULTS_JS = """
+(function() {
+    try {
+        var out = [];
+        var seenHref = {};
+        var seenCards = [];
+
+        var EXCLUDE = [
+            '#tads', '#tadsb', '.pla-unit',
+            '.related-question-pair',
+            '.kp-wholepage', '.osrp-blk', '.I6TXqe',
+            '[aria-label="Ads"]',
+            '[aria-label="Quảng cáo"]',
+            '[aria-label="Mọi người cũng hỏi"]'
+        ];
+
+        function isExcluded(el) {
+            if (!el || !el.closest) return false;
+            for (var i = 0; i < EXCLUDE.length; i++) {
+                if (el.closest(EXCLUDE[i])) return true;
+            }
+            return false;
+        }
+
+        function norm(text) {
+            text = (text || '').toLowerCase();
+            try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
+            return text;
+        }
+
+        function hasSponsorLabel(el) {
+            if (!el) return false;
+            var text = norm(el.innerText || el.textContent || '');
+            return text.indexOf('nha tai tro') >= 0;
+        }
+
+        function isAdCandidate(aTag, card) {
+            var href = aTag.href || '';
+            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) return true;
+            return hasSponsorLabel(card || aTag);
+        }
+
+        function getDomain(href) {
+            try { return new URL(href).hostname.replace(/^www\./, ''); } catch(e) { return ''; }
+        }
+
+        function resolveHref(href) {
+            try {
+                var url = new URL(href);
+                if (url.hostname.indexOf('google.') >= 0) {
+                    var q = url.searchParams.get('q') || url.searchParams.get('url');
+                    if (q && q.indexOf('http') === 0) return q;
+                }
+                return href;
+            } catch(e) {
+                return href;
+            }
+        }
+
+        function findCard(el) {
+            var cur = el;
+            for (var i = 0; i < 9 && cur && cur !== document.body; i++) {
+                if (cur.matches && cur.matches('div.g, .MjjYud, .N54PNb, [data-hveid]')) return cur;
+                cur = cur.parentElement;
+            }
+            return el.parentElement || el;
+        }
+
+        function cleanTitle(text) {
+            return (text || '')
+                .replace(/\s+/g, ' ')
+                .replace(/^https?:\/\/\S+\s*/i, '')
+                .trim();
+        }
+
+        function titleFromCard(card, aTag) {
+            var titleEl = titleElementForLink(aTag, card);
+            var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+            if (title.length >= 3) return title;
+
+            var lines = (aTag.innerText || aTag.textContent || '').split('\n')
+                .map(function(l) { return cleanTitle(l); })
+                .filter(function(l) {
+                    var n = norm(l);
+                    return l.length >= 3 && n.indexOf('nha tai tro') < 0 && n.indexOf('http') !== 0;
+                });
+            lines.sort(function(a, b) { return b.length - a.length; });
+            return lines[0] || '';
+        }
+
+        function titleElementForLink(aTag, card) {
+            var selector = 'h3, [role="heading"], .LC20lb';
+            if (aTag) {
+                if (aTag.matches && aTag.matches(selector)) return aTag;
+                var insideLink = aTag.querySelector ? aTag.querySelector(selector) : null;
+                if (insideLink) return insideLink;
+            }
+            if (card && card.querySelector) {
+                var insideCard = card.querySelector(selector);
+                if (insideCard) return insideCard;
+            }
+            return null;
+        }
+
+        function visualY(el) {
+            try {
+                var r = el.getBoundingClientRect();
+                return window.pageYOffset + r.top;
+            } catch(e) {
+                return 99999999;
+            }
+        }
+
+        function addCandidate(candidate) {
+            var aTag = candidate.a;
+            var card = candidate.card;
+            if (!aTag || !card) return false;
+            if (isExcluded(aTag) || isExcluded(card)) return false;
+            if (isAdCandidate(aTag, card)) return false;
+            if (seenCards.indexOf(card) >= 0) return false;
+
+            var href = resolveHref(aTag.href || '');
+            if (!href || href.indexOf('http') !== 0) return false;
+            if (seenHref[href]) return false;
+
+            var domain = getDomain(href);
+            if (!domain) return false;
+            if (domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
+
+            var title = candidate.title || titleFromCard(card, aTag);
+            if (!title || title.length < 3 || title.length > 200) return false;
+
+            seenHref[href] = true;
+            seenCards.push(card);
+            out.push({ t: title, d: domain, u: href, ad: false });
+            return true;
+        }
+
+        var searchRoot = document.querySelector('#rso, #search') || document.body;
+        var candidates = [];
+        var links = searchRoot.querySelectorAll('a[href]');
+        for (var i = 0; i < links.length; i++) {
+            var a = links[i];
+            if (isExcluded(a)) continue;
+            var href = resolveHref(a.href || '');
+            if (!href || href.indexOf('http') !== 0) continue;
+            var domain = getDomain(href);
+            if (!domain || domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
+            var card = findCard(a);
+            candidates.push({ a: a, card: card, y: visualY(card || a) });
+        }
+
+        candidates.sort(function(a, b) { return a.y - b.y; });
+        for (var j = 0; j < candidates.length && out.length < 20; j++) {
+            addCandidate(candidates[j]);
+        }
+
+        return JSON.stringify(out);
+    } catch(e) {
+        return JSON.stringify([{ t: 'ERROR:' + e.message, d: '', u: '', ad: false }]);
+    }
+})()
+""".trimIndent()
+
 /** JS lấy vị trí Google đang phục vụ kết quả — trả raw text, không filter cứng */
+// Extract top theo DOM đã render: ưu tiên heading, fallback link-card, sort theo vị trí Y trên ảnh.
+private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
+(function() {
+    try {
+        var out = [];
+        var seenUrl = {};
+        var seenTitleDomain = {};
+
+        var EXCLUDE = [
+            '#tads', '#tadsb', '.pla-unit',
+            '.related-question-pair',
+            '.kp-wholepage', '.osrp-blk', '.I6TXqe',
+            '[aria-label="Ads"]',
+            '[aria-label="Quảng cáo"]',
+            '[aria-label="Mọi người cũng hỏi"]'
+        ];
+
+        function isExcluded(el) {
+            if (!el || !el.closest) return false;
+            for (var i = 0; i < EXCLUDE.length; i++) {
+                if (el.closest(EXCLUDE[i])) return true;
+            }
+            return false;
+        }
+
+        function norm(text) {
+            text = (text || '').toLowerCase();
+            try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
+            return text.replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+
+        function cleanTitle(text) {
+            return (text || '')
+                .replace(/\s+/g, ' ')
+                .replace(/^https?:\/\/\S+\s*/i, '')
+                .trim();
+        }
+
+        function hasSponsorLabel(el) {
+            if (!el) return false;
+            return norm(el.innerText || el.textContent || '').indexOf('nha tai tro') >= 0;
+        }
+
+        function visibleY(el) {
+            try {
+                var r = el.getBoundingClientRect();
+                if (r.width <= 0 || r.height <= 0) return null;
+                return window.pageYOffset + r.top;
+            } catch(e) {
+                return null;
+            }
+        }
+
+        function resolveHref(href) {
+            try {
+                var url = new URL(href);
+                if (url.hostname.indexOf('google.') >= 0) {
+                    var q = url.searchParams.get('q') || url.searchParams.get('url');
+                    if (q && q.indexOf('http') === 0) return q;
+                }
+                return href;
+            } catch(e) {
+                return href;
+            }
+        }
+
+        function canonicalHref(href) {
+            try {
+                var url = new URL(resolveHref(href));
+                url.hash = '';
+                ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','ved','usg','sa'].forEach(function(k) {
+                    url.searchParams.delete(k);
+                });
+                return url.toString();
+            } catch(e) {
+                return resolveHref(href || '');
+            }
+        }
+
+        function domainOf(href) {
+            try { return new URL(resolveHref(href)).hostname.replace(/^www\./, ''); } catch(e) { return ''; }
+        }
+
+        function findCard(el) {
+            var cur = el;
+            for (var i = 0; i < 9 && cur && cur !== document.body; i++) {
+                if (cur.matches && cur.matches('div.g, .MjjYud, .N54PNb, [data-hveid]')) return cur;
+                cur = cur.parentElement;
+            }
+            return el.parentElement || el;
+        }
+
+        function findLink(titleEl, card) {
+            var a = titleEl.closest ? titleEl.closest('a[href]') : null;
+            if (a) return a;
+            var cur = titleEl.parentElement;
+            for (var i = 0; i < 6 && cur; i++) {
+                a = cur.querySelector ? cur.querySelector('a[href^="http"], a[href^="/url"], a[href^="/search"]') : null;
+                if (a) return a;
+                cur = cur.parentElement;
+            }
+            return card && card.querySelector ? card.querySelector('a[href]') : null;
+        }
+
+        function titleFromLink(a, domain) {
+            var lines = (a.innerText || a.textContent || '').split('\n')
+                .map(function(l) { return cleanTitle(l); })
+                .filter(function(l) {
+                    if (!l || l.length < 3 || l.length > 90) return false;
+                    var n = norm(l);
+                    if (n.indexOf('nha tai tro') >= 0) return false;
+                    if (n.indexOf('http') === 0) return false;
+                    if (domain && n.indexOf(norm(domain)) >= 0) return false;
+                    return true;
+                });
+            if (lines.length === 0) return '';
+            return lines[0];
+        }
+
+        var root = document.querySelector('#rso, #search') || document.body;
+        var headings = root.querySelectorAll('h3, [role="heading"], .LC20lb');
+        var candidates = [];
+
+        for (var i = 0; i < headings.length; i++) {
+            var h = headings[i];
+            if (isExcluded(h)) continue;
+
+            var title = cleanTitle(h.innerText || h.textContent || '');
+            if (!title || title.length < 3 || title.length > 200) continue;
+
+            var y = visibleY(h);
+            if (y === null || y < 0) continue;
+
+            var card = findCard(h);
+            if (isExcluded(card) || hasSponsorLabel(card)) continue;
+
+            var a = findLink(h, card);
+            if (!a) continue;
+
+            var href = resolveHref(a.href || '');
+            if (!href || href.indexOf('http') !== 0) continue;
+            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) continue;
+
+            var domain = domainOf(href);
+            if (!domain) continue;
+            if (domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
+
+            candidates.push({ y: y, t: title, d: domain, u: canonicalHref(href) });
+        }
+
+        var links = root.querySelectorAll('a[href]');
+        for (var k = 0; k < links.length; k++) {
+            var link = links[k];
+            if (isExcluded(link)) continue;
+
+            var linkHref = resolveHref(link.href || '');
+            if (!linkHref || linkHref.indexOf('http') !== 0) continue;
+            if (linkHref.indexOf('/aclk?') >= 0 || linkHref.indexOf('googleadservices') >= 0) continue;
+
+            var linkDomain = domainOf(linkHref);
+            if (!linkDomain) continue;
+            if (linkDomain.indexOf('google.') >= 0 || linkDomain.indexOf('gstatic.') >= 0 || linkDomain.indexOf('googleusercontent.') >= 0) continue;
+
+            var linkCard = findCard(link);
+            if (isExcluded(linkCard) || hasSponsorLabel(linkCard)) continue;
+
+            var linkY = visibleY(link);
+            if (linkY === null || linkY < 0) continue;
+
+            var linkTitle = titleFromLink(link, linkDomain) || linkDomain;
+            if (!linkTitle || linkTitle.length < 3 || linkTitle.length > 200) continue;
+
+            candidates.push({ y: linkY, t: linkTitle, d: linkDomain, u: canonicalHref(linkHref) });
+        }
+
+        candidates.sort(function(a, b) { return a.y - b.y; });
+
+        for (var j = 0; j < candidates.length && out.length < 20; j++) {
+            var c = candidates[j];
+            var titleKey = norm(c.t) + '|' + c.d;
+            if (seenTitleDomain[titleKey] || seenUrl[c.u]) continue;
+            seenTitleDomain[titleKey] = true;
+            seenUrl[c.u] = true;
+            out.push({ t: c.t, d: c.d, u: c.u, ad: false });
+        }
+
+        return JSON.stringify(out);
+    } catch(e) {
+        return JSON.stringify([{ t: 'ERROR:' + e.message, d: '', u: '', ad: false }]);
+    }
+})()
+""".trimIndent()
+
+private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = """
+(function() {
+    try {
+        var out = [];
+        var seenHref = {};
+        var seenCards = [];
+        var minY = $minCssY;
+        var maxY = $maxCssY;
+
+        var EXCLUDE = [
+            '#tads', '#tadsb', '.pla-unit',
+            '.related-question-pair',
+            '.kp-wholepage', '.osrp-blk', '.I6TXqe',
+            '[aria-label="Ads"]',
+            '[aria-label="Quảng cáo"]',
+            '[aria-label="Mọi người cũng hỏi"]'
+        ];
+
+        function isExcluded(el) {
+            if (!el || !el.closest) return false;
+            for (var i = 0; i < EXCLUDE.length; i++) {
+                if (el.closest(EXCLUDE[i])) return true;
+            }
+            return false;
+        }
+
+        function norm(text) {
+            text = (text || '').toLowerCase();
+            try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
+            return text;
+        }
+
+        function hasSponsorLabel(el) {
+            if (!el) return false;
+            var text = norm(el.innerText || el.textContent || '');
+            return text.indexOf('nha tai tro') >= 0;
+        }
+
+        function isAdCandidate(aTag, card) {
+            var href = aTag.href || '';
+            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) return true;
+            return hasSponsorLabel(card || aTag);
+        }
+
+        function getDomain(href) {
+            try { return new URL(href).hostname.replace(/^www\./, ''); } catch(e) { return ''; }
+        }
+
+        function resolveHref(href) {
+            try {
+                var url = new URL(href);
+                if (url.hostname.indexOf('google.') >= 0) {
+                    var q = url.searchParams.get('q') || url.searchParams.get('url');
+                    if (q && q.indexOf('http') === 0) return q;
+                }
+                return href;
+            } catch(e) {
+                return href;
+            }
+        }
+
+        function findCard(el) {
+            var cur = el;
+            for (var i = 0; i < 9 && cur && cur !== document.body; i++) {
+                if (cur.matches && cur.matches('div.g, .MjjYud, .N54PNb, [data-hveid]')) return cur;
+                cur = cur.parentElement;
+            }
+            return el.parentElement || el;
+        }
+
+        function cleanTitle(text) {
+            return (text || '')
+                .replace(/\s+/g, ' ')
+                .replace(/^https?:\/\/\S+\s*/i, '')
+                .trim();
+        }
+
+        function titleFromCard(card, aTag) {
+            var titleEl = titleElementForLink(aTag, card);
+            var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+            if (title.length >= 3) return title;
+
+            var lines = (aTag.innerText || aTag.textContent || '').split('\n')
+                .map(function(l) { return cleanTitle(l); })
+                .filter(function(l) {
+                    var n = norm(l);
+                    return l.length >= 3 && n.indexOf('nha tai tro') < 0 && n.indexOf('http') !== 0;
+                });
+            lines.sort(function(a, b) { return b.length - a.length; });
+            return lines[0] || '';
+        }
+
+        function titleElementForLink(aTag, card) {
+            var selector = 'h3, [role="heading"], .LC20lb';
+            if (aTag) {
+                if (aTag.matches && aTag.matches(selector)) return aTag;
+                var insideLink = aTag.querySelector ? aTag.querySelector(selector) : null;
+                if (insideLink) return insideLink;
+            }
+            if (card && card.querySelector) {
+                var insideCard = card.querySelector(selector);
+                if (insideCard) return insideCard;
+            }
+            return null;
+        }
+
+        function absY(el) {
+            try {
+                var r = el.getBoundingClientRect();
+                return window.pageYOffset + r.top;
+            } catch(e) {
+                return 99999999;
+            }
+        }
+
+        function addCandidate(candidate) {
+            var aTag = candidate.a;
+            var card = candidate.card;
+            if (!aTag || !card) return false;
+            if (isExcluded(aTag) || isExcluded(card)) return false;
+            if (isAdCandidate(aTag, card)) return false;
+            if (seenCards.indexOf(card) >= 0) return false;
+
+            var href = resolveHref(aTag.href || '');
+            if (!href || href.indexOf('http') !== 0) return false;
+            if (seenHref[href]) return false;
+
+            var domain = getDomain(href);
+            if (!domain) return false;
+            if (domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
+
+            var title = candidate.title || titleFromCard(card, aTag);
+            if (!title || title.length < 3 || title.length > 200) return false;
+
+            seenHref[href] = true;
+            seenCards.push(card);
+            out.push({ t: title, d: domain, u: href, y: candidate.y, ad: false });
+            return true;
+        }
+
+        var searchRoot = document.querySelector('#rso, #search') || document.body;
+        var candidates = [];
+        var links = searchRoot.querySelectorAll('a[href]');
+        for (var i = 0; i < links.length; i++) {
+            var a = links[i];
+            if (isExcluded(a)) continue;
+            var href = resolveHref(a.href || '');
+            if (!href || href.indexOf('http') !== 0) continue;
+            var domain = getDomain(href);
+            if (!domain || domain.indexOf('google.') >= 0 || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
+            var card = findCard(a);
+            var titleEl = titleElementForLink(a, card);
+            var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+            var y = absY(titleEl || a);
+            if (y < minY || y >= maxY) continue;
+            candidates.push({ a: a, card: card, y: y, title: title });
+        }
+
+        candidates.sort(function(a, b) { return a.y - b.y; });
+        for (var j = 0; j < candidates.length && out.length < 20; j++) {
+            addCandidate(candidates[j]);
+        }
+
+        return JSON.stringify(out);
+    } catch(e) {
+        return JSON.stringify([{ t: 'ERROR:' + e.message, d: '', u: '', ad: false }]);
+    }
+})()
+""".trimIndent()
+
 private val LOCATION_JS = """
 (function() {
     try {
@@ -444,15 +981,7 @@ fun WebCaptureScreen(
 
         capturing = true
 
-        // ── Bước 4: Chạy JS lấy kết quả (trước khi scroll về top để giữ DOM đầy đủ) ──
-        val jsonStr = suspendCancellableCoroutine { cont ->
-            wv.evaluateJavascript(EXTRACT_JS) { r -> cont.resume(r ?: "[]") }
-        }
-        Log.d(TAG, "RAW JS → $jsonStr")
-        val jsResults = parseJsResults(jsonStr)
-        Log.d(TAG, "PARSED ${jsResults.size} results")
-
-        // ── Bước 4b: Detect city từ DOM Google ───────────────────────────
+        // Bước 4: Detect city trước; result top sẽ extract sau capture để khớp DOM đã render.
         val rawCity = suspendCancellableCoroutine { cont ->
             wv.evaluateJavascript(LOCATION_JS) { r ->
                 cont.resume((r ?: "").trim().removeSurrounding("\""))
@@ -465,14 +994,30 @@ fun WebCaptureScreen(
         delay(300)
 
         // ── Bước 5: Chụp ảnh ─────────────────────────────────────────────
-        try {
-            val paths = captureWebViewTiles(wv, context.getExternalFilesDir(null))
-            Log.d(TAG, "Captured ${paths.size} tile(s)")
-            onCaptureDone(paths, jsResults, rawCity)
+        // Capture full page trước để Google lazy-render đủ kết quả cuối trang.
+        val captureOutput = try {
+            val output = captureWebViewTiles(wv, context.getExternalFilesDir(null))
+            Log.d(TAG, "Captured ${output.paths.size} tile(s)")
+            output
         } catch (e: Exception) {
             Log.e(TAG, "Capture failed", e)
-            onCaptureDone(emptyList(), jsResults, rawCity)
+            CaptureOutput(emptyList(), emptyList())
         }
+
+        delay(250)
+
+        // Extract sau capture, khi WebView vẫn ở cuối trang để không mất top cuối.
+        val jsonStr = suspendCancellableCoroutine { cont ->
+            wv.evaluateJavascript(EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS) { r -> cont.resume(r ?: "[]") }
+        }
+        Log.d(TAG, "RAW HEADING ORDER JS -> $jsonStr")
+        val jsResults = parseJsResults(jsonStr)
+        Log.d(TAG, "PARSED HEADING ORDER ${jsResults.size} results")
+        logParsedTopResults(jsResults)
+
+        // Chỉ scroll về đầu sau khi đã lấy top xong.
+        wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+        onCaptureDone(captureOutput.paths, jsResults, rawCity)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -765,7 +1310,7 @@ private fun parseJsResults(raw: String): List<SearchResult> {
             val obj   = arr.getJSONObject(i)
             val isAd  = obj.optBoolean("ad", false)
             val title = obj.optString("t", "").trim()
-            if (isAd || title.isBlank()) return@mapNotNull null
+            if (isAd || title.isBlank() || title.startsWith("ERROR:", ignoreCase = true)) return@mapNotNull null
             rank++
             SearchResult(
                 rank   = rank,
@@ -780,11 +1325,26 @@ private fun parseJsResults(raw: String): List<SearchResult> {
     }
 }
 
+// Log 10 top đầu để đối chiếu ảnh, dialog và payload submit.
+private fun logParsedTopResults(results: List<SearchResult>) {
+    if (results.isEmpty()) {
+        Log.w(TAG, "TOP DEBUG: no parsed results")
+        return
+    }
+    Log.d(TAG, "TOP DEBUG: parsed=${results.size}, submitWillSend=${results.take(10).size}")
+    results.take(10).forEach { r ->
+        Log.d(TAG, "TOP DEBUG #${r.rank}: domain=${r.domain} url=${r.url} title=${r.title}")
+    }
+    if (results.size > 10) {
+        Log.d(TAG, "TOP DEBUG: ${results.size - 10} extra result(s) parsed but not shown/submitted")
+    }
+}
+
 /**
- * Scroll từ top → footer, chụp từng viewport bằng PixelCopy rồi ghép thành 1 ảnh full page.
- * Dùng window.innerHeight (CSS px) làm bước scroll — KHÔNG dùng webView.height (physical px).
+ * Capture full page bằng PixelCopy.
+ * Scroll theo CSS px, ghép theo actualY và crop overlap để tránh trùng ảnh.
  */
-private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<String> {
+private suspend fun captureWebViewTiles(webView: WebView, dir: File?): CaptureOutput {
     val w       = webView.width.takeIf { it > 0 } ?: 1080
     val viewHPx = webView.height.takeIf { it > 0 } ?: 1920
     val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -883,7 +1443,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<Stri
             tileBmp.recycle()
             chunkBitmap.recycle()
             webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
-            return emptyList()
+            return CaptureOutput(emptyList(), emptyList())
         }
 
         val tileTop = (actualY * dpr).toInt().coerceAtLeast(0)
@@ -927,10 +1487,9 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<Stri
     saveChunkIfNeeded(force = paths.isEmpty())
     chunkBitmap.recycle()
     setCaptureOverlaysHidden(webView, hide = false)
-    webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
 
     Log.d(TAG, "Full page saved as ${paths.size} file(s), tiles=$idx dpr=$dpr totalPhysH=$totalPhysH capturedBottom=$capturedBottom overlapCss=$overlapCss")
-    return paths
+    return CaptureOutput(paths, emptyList())
 }
 
 private fun createChunkBitmap(width: Int, totalHeight: Int, chunkTop: Int): Bitmap {

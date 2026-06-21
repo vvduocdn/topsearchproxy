@@ -608,6 +608,7 @@ private fun KeywordResultsDialog(
     results:   List<SearchResult>,
     onDismiss: () -> Unit,
 ) {
+    val visibleResults = results.take(10)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -622,7 +623,7 @@ private fun KeywordResultsDialog(
                         .heightIn(max = 360.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    results.forEachIndexed { index, r ->
+                    visibleResults.forEachIndexed { index, r ->
                         Row(
                             modifier          = Modifier
                                 .fillMaxWidth()
@@ -653,7 +654,7 @@ private fun KeywordResultsDialog(
                                 }
                             }
                         }
-                        if (index < results.lastIndex) {
+                        if (index < visibleResults.lastIndex) {
                             HorizontalDivider(
                                 thickness = 0.5.dp,
                                 color     = MaterialTheme.colorScheme.outlineVariant,
