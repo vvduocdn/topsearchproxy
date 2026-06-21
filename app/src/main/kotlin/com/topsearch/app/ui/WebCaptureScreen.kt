@@ -201,20 +201,16 @@ private val EXTRACT_JS = """
             if (isExcluded(h3)) continue;
 
             var title = (h3.innerText || h3.textContent || '').trim();
-            if (!title || title.length < 3 || title.length > 200 || seen[title]) continue;
+            if (!title || title.length < 3 || title.length > 200) continue;
 
-            // Tìm link: trong h3, hoặc parent là <a>, hoặc leo lên tối đa 6 cấp
-            var aTag = h3.querySelector('a[href]');
+            // Tìm link: trong h3, ancestor <a>, hoặc leo lên tối đa 6 cấp tìm con cháu
+            var aTag = h3.querySelector('a[href]') || h3.closest('a[href]');
             if (!aTag) {
                 var par = h3.parentElement;
-                if (par && par.tagName === 'A' && par.href) {
-                    aTag = par;
-                } else {
-                    for (var p = 0; p < 6 && par; p++) {
-                        var c = par.querySelector('a[href^="http"]');
-                        if (c && !isExcluded(c)) { aTag = c; break; }
-                        par = par.parentElement;
-                    }
+                for (var p = 0; p < 6 && par; p++) {
+                    var c = par.querySelector('a[href^="http"]');
+                    if (c && !isExcluded(c)) { aTag = c; break; }
+                    par = par.parentElement;
                 }
             }
             tryAdd(title, aTag);
