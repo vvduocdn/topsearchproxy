@@ -76,20 +76,30 @@ val VIETNAM_CITIES = listOf(
 
 @Composable
 fun SearchScreen(
-    loadingStep:       String               = "",
-    countdown:         Int                  = 0,
-    errorMessage:      String               = "",
-    initialKeyword:    String               = "",
-    skipProxy:         Boolean              = false,
-    socketInfo:        String               = "",
-    isConnected:       Boolean              = false,
-    keywordBatch:      List<KeywordBatchItem>            = emptyList(),
-    keywordResults:    Map<String, List<SearchResult>>   = emptyMap(),
-    onSkipProxyChange: (Boolean) -> Unit                 = {},
-    onSearch:          (keyword: String, city: VietnamCity) -> Unit,
+    loadingStep:          String               = "",
+    countdown:            Int                  = 0,
+    errorMessage:         String               = "",
+    initialKeyword:       String               = "",
+    skipProxy:            Boolean              = false,
+    socketInfo:           String               = "",
+    isConnected:          Boolean              = false,
+    keywordBatch:         List<KeywordBatchItem>            = emptyList(),
+    keywordResults:       Map<String, List<SearchResult>>   = emptyMap(),
+    manualResult:         Pair<String, List<SearchResult>>? = null,
+    onManualResultDismiss: () -> Unit                       = {},
+    onSkipProxyChange:    (Boolean) -> Unit                 = {},
+    onSearch:             (keyword: String, city: VietnamCity) -> Unit,
 ) {
     val isLoading = loadingStep.isNotEmpty()
     var showManual by remember { mutableStateOf(false) }
+
+    if (manualResult != null && manualResult.second.isNotEmpty()) {
+        KeywordResultsDialog(
+            keyword   = manualResult.first,
+            results   = manualResult.second,
+            onDismiss = onManualResultDismiss,
+        )
+    }
 
     // Nếu có lỗi manual search → giữ manual mode
     LaunchedEffect(errorMessage) {

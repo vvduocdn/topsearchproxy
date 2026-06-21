@@ -130,14 +130,13 @@ private val WAIT_READY_JS = """
 private val EXTRACT_JS = """
 (function() {
     try {
-        var out        = [];
-        var seen       = {};
-        var seenDomain = {};
+        var out  = [];
+        var seen = {};
 
         var EXCLUDE = [
             '#tads', '#tadsb',
             '[data-text-ad]', '.uEierd', '.pla-unit',
-            '.related-question-pair', '.g-blk', '.ifM9O', '.qxDOhb',
+            '.related-question-pair', '.ifM9O',
             '.kp-wholepage', '.osrp-blk', '.I6TXqe',
             '[aria-label="Ads"]'
         ];
@@ -175,9 +174,8 @@ private val EXTRACT_JS = """
             if (!href || href.indexOf('http') !== 0) return false;
             if (isAdLink(aTag) || isExcluded(aTag)) return false;
             var d = getDomain(href);
-            if (!d || d.indexOf('google.') >= 0 || seenDomain[d]) return false;
-            seen[title]   = true;
-            seenDomain[d] = true;
+            if (!d || d.indexOf('google.') >= 0) return false;
+            seen[title] = true;
             out.push({ t: title, d: d, u: href, ad: false });
             return true;
         }

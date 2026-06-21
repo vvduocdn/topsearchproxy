@@ -117,13 +117,16 @@ class MainActivity : ComponentActivity() {
 
                     is SearchState.Done ->
                         SearchScreen(
-                            skipProxy         = skipProxy,
-                            socketInfo        = socketInfo,
-                            isConnected       = isConnected,
-                            keywordBatch      = keywordBatch,
-                            keywordResults    = keywordResults,
-                            onSkipProxyChange = viewModel::setSkipProxy,
-                            onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
+                            skipProxy             = skipProxy,
+                            socketInfo            = socketInfo,
+                            isConnected           = isConnected,
+                            keywordBatch          = keywordBatch,
+                            keywordResults        = keywordResults,
+                            manualResult          = if (s.socketInfo.isBlank() && s.results.isNotEmpty())
+                                                        s.keyword to s.results else null,
+                            onManualResultDismiss = viewModel::reset,
+                            onSkipProxyChange     = viewModel::setSkipProxy,
+                            onSearch              = { kw, city -> viewModel.startSearch(kw, city) },
                         )
 
                     is SearchState.Error ->
