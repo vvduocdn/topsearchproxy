@@ -179,14 +179,15 @@ private val EXTRACT_JS = """
         }
 
         function tryAdd(title, aTag) {
-            if (!title || title.length < 3 || title.length > 200 || seen[title]) return false;
+            if (!title || title.length < 3 || title.length > 200) return false;
             if (!aTag) return false;
             var href = resolveHref(aTag.href || '');
             if (!href || href.indexOf('http') !== 0) return false;
             if (isAdLink(aTag) || isExcluded(aTag)) return false;
+            if (seen[href]) return false;
             var d = getDomain(href);
             if (!d || d.indexOf('google.') >= 0) return false;
-            seen[title] = true;
+            seen[href] = true;
             out.push({ t: title, d: d, u: href, ad: false });
             return true;
         }
