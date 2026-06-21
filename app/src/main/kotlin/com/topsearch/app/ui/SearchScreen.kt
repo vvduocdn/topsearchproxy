@@ -42,8 +42,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.style.TextOverflow
 import com.topsearch.app.CheckStatus
 import com.topsearch.app.KeywordBatchItem
+import com.topsearch.app.SearchResult
 
 data class VietnamCity(
     val label:     String,
@@ -83,9 +86,9 @@ fun SearchScreen(
     lastKeyword:       String               = "",
     lastResultCount:   Int                  = 0,
     lastResultInfo:    String               = "",
-    keywordBatch:      List<KeywordBatchItem> = emptyList(),
-    onViewResults:     () -> Unit           = {},
-    onSkipProxyChange: (Boolean) -> Unit    = {},
+    keywordBatch:      List<KeywordBatchItem>            = emptyList(),
+    keywordResults:    Map<String, List<SearchResult>>   = emptyMap(),
+    onSkipProxyChange: (Boolean) -> Unit                 = {},
     onSearch:          (keyword: String, city: VietnamCity) -> Unit,
 ) {
     val isLoading = loadingStep.isNotEmpty()
@@ -124,16 +127,15 @@ fun SearchScreen(
                 )
             } else {
                 StandbyContent(
-                    isLoading       = isLoading,
-                    loadingStep     = loadingStep,
-                    isConnected     = isConnected,
-                    socketInfo      = socketInfo,
-                    lastKeyword     = lastKeyword,
-                    lastResultCount = lastResultCount,
-                    lastResultInfo  = lastResultInfo,
-                    keywordBatch    = keywordBatch,
-                    onViewResults   = onViewResults,
-                    onManualClick   = { showManual = true },
+                    isLoading      = isLoading,
+                    loadingStep    = loadingStep,
+                    isConnected    = isConnected,
+                    socketInfo     = socketInfo,
+                    lastKeyword    = lastKeyword,
+                    lastResultInfo = lastResultInfo,
+                    keywordBatch   = keywordBatch,
+                    keywordResults = keywordResults,
+                    onManualClick  = { showManual = true },
                 )
             }
         }
@@ -144,16 +146,15 @@ fun SearchScreen(
 
 @Composable
 private fun StandbyContent(
-    isLoading:       Boolean,
-    loadingStep:     String,
-    isConnected:     Boolean,
-    socketInfo:      String,
-    lastKeyword:     String,
-    lastResultCount: Int,
-    lastResultInfo:  String,
-    keywordBatch:    List<KeywordBatchItem> = emptyList(),
-    onViewResults:   () -> Unit,
-    onManualClick:   () -> Unit,
+    isLoading:      Boolean,
+    loadingStep:    String,
+    isConnected:    Boolean,
+    socketInfo:     String,
+    lastKeyword:    String,
+    lastResultInfo: String,
+    keywordBatch:   List<KeywordBatchItem>          = emptyList(),
+    keywordResults: Map<String, List<SearchResult>> = emptyMap(),
+    onManualClick:  () -> Unit,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val ringScale by infiniteTransition.animateFloat(
@@ -275,12 +276,12 @@ private fun StandbyContent(
 
         if (keywordBatch.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            KeywordBatchPanel(keywordBatch)
+            KeywordBatchPanel(keywordBatch, keywordResults)
         }
 
         Spacer(Modifier.weight(0.45f))
 
-        // ── Last result card OR socket-info card ───────────────────────────
+        // ── Last result info card ──────────────────────────────────────────
         AnimatedVisibility(
             visible = lastKeyword.isNotEmpty(),
             enter   = fadeIn() + expandVertically(),
@@ -295,22 +296,13 @@ private fun StandbyContent(
                 ),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text       = lastResultInfo,
-                        color      = MaterialTheme.colorScheme.onPrimaryContainer,
-                        style      = MaterialTheme.typography.bodySmall,
-                        lineHeight = 19.sp,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick  = onViewResults,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape    = RoundedCornerShape(10.dp),
-                    ) {
-                        Text("Xem $lastResultCount kết quả  →", fontSize = 14.sp)
-                    }
-                }
+                Text(
+                    text       = lastResultInfo,
+                    color      = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier   = Modifier.padding(14.dp),
+                    style      = MaterialTheme.typography.bodySmall,
+                    lineHeight = 19.sp,
+                )
             }
         }
 
@@ -538,7 +530,10 @@ private fun ManualSearchContent(
 // ── Keyword batch panel ─────────────────────────────────────────────────────────
 
 @Composable
-private fun KeywordBatchPanel(items: List<KeywordBatchItem>) {
+private fun KeywordBatchPanel(
+    items:          List<KeywordBatchItem>,
+    keywordResults: Map<String, List<SearchResult>> = emptyMap(),
+) {
     val doneCount = items.count { it.status == CheckStatus.DONE }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -558,16 +553,29 @@ private fun KeywordBatchPanel(items: List<KeywordBatchItem>) {
                 color      = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
             )
             Spacer(Modifier.height(6.dp))
-            items.forEach { item -> KeywordBatchRow(item) }
+            items.forEach { item -> KeywordBatchRow(item, keywordResults[item.requestId]) }
         }
     }
 }
 
 @Composable
-private fun KeywordBatchRow(item: KeywordBatchItem) {
+private fun KeywordBatchRow(item: KeywordBatchItem, results: List<SearchResult>? = null) {
+    var showResults by remember { mutableStateOf(false) }
+
+    if (showResults) {
+        KeywordResultsDialog(
+            keyword   = item.keyword,
+            results   = results ?: emptyList(),
+            onDismiss = { showResults = false },
+        )
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier          = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        modifier          = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = item.status == CheckStatus.DONE) { showResults = true }
+            .padding(vertical = 3.dp),
     ) {
         Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
             when (item.status) {
@@ -614,6 +622,73 @@ private fun KeywordBatchRow(item: KeywordBatchItem) {
             )
         }
     }
+}
+
+@Composable
+private fun KeywordResultsDialog(
+    keyword:   String,
+    results:   List<SearchResult>,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(keyword, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+        },
+        text = {
+            if (results.isEmpty()) {
+                Text("Chưa có kết quả", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    results.forEachIndexed { index, r ->
+                        Row(
+                            modifier          = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Text(
+                                "${r.rank}.",
+                                style      = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier   = Modifier.width(26.dp),
+                                color      = MaterialTheme.colorScheme.primary,
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    r.domain.ifBlank { r.title },
+                                    style      = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                if (r.url.isNotBlank()) {
+                                    Text(
+                                        r.url,
+                                        style    = MaterialTheme.typography.labelSmall,
+                                        color    = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                        if (index < results.lastIndex) {
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color     = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Đóng") }
+        },
+    )
 }
 
 // ── Shared ──────────────────────────────────────────────────────────────────────

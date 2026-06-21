@@ -71,6 +71,13 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private val resultCache = mutableMapOf<String, List<SearchResult>>()
     private fun cacheKey(keyword: String, country: Int) = "${keyword.trim().lowercase()}_$country"
 
+    // Lookup requestId → SocketRequest để auto-retry sau khi batch kết thúc
+    private val batchRequests = mutableMapOf<String, SearchBridge.SocketRequest>()
+
+    // Kết quả đã check theo requestId — user nhấn keyword row để xem lại
+    private val _keywordResults = MutableStateFlow<Map<String, List<SearchResult>>>(emptyMap())
+    val keywordResults: StateFlow<Map<String, List<SearchResult>>> = _keywordResults.asStateFlow()
+
     init {
         // Populate batch status list when server sends a new batch; persist to disk for crash recovery
         viewModelScope.launch {
@@ -83,6 +90,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                         KeywordQueueStore.Entry(it.requestId, it.keyword, it.proxy, it.country)
                     })
                 }
+                requests.forEach { batchRequests[it.requestId] = it }
             }
         }
         // Forward incoming socket requests to the sequential queue
@@ -98,6 +106,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             for (req in requestQueue) {
                 pendingQueueCount = (pendingQueueCount - 1).coerceAtLeast(0)
                 processSocketRequest(req)
+                // When queue drains, auto-retry any ERROR keywords (up to 3 times each)
+                if (pendingQueueCount == 0 && requestQueue.isEmpty) {
+                    retryErrorKeywords()
+                }
             }
         }
     }
@@ -237,6 +249,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         if (jsResults.isNotEmpty()) {
             Log.d("TopSearch", buildResultJson(keyword, city, jsResults))
             resultCache[cacheKey(keyword, country)] = jsResults
+            reqId?.let { _keywordResults.value = _keywordResults.value + (it to jsResults) }
             if (reqId != null) {
                 updateBatchStatus(reqId, CheckStatus.DONE)
                 SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp)
@@ -263,7 +276,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             try {
                 val results = OcrHelper.extractSearchResults(firstPath)
                 Log.d("TopSearch", buildResultJson(keyword, city, results))
-                if (results.isNotEmpty()) resultCache[cacheKey(keyword, country)] = results
+                if (results.isNotEmpty()) {
+                    resultCache[cacheKey(keyword, country)] = results
+                    reqId?.let { _keywordResults.value = _keywordResults.value + (it to results) }
+                }
                 if (reqId != null) {
                     updateBatchStatus(reqId, CheckStatus.DONE)
                     SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp)
@@ -371,6 +387,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 status    = if (it.status == CheckStatus.DONE) CheckStatus.DONE else CheckStatus.PENDING,
             )
         }
+        entries.forEach { e ->
+            batchRequests[e.requestId] = SearchBridge.SocketRequest(e.requestId, e.keyword, e.proxy, e.country)
+        }
         viewModelScope.launch {
             SearchBridge.resumeRequest.emit(
                 pending.map { SearchBridge.SocketRequest(it.requestId, it.keyword, it.proxy, it.country) }
@@ -384,6 +403,30 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         viewModelScope.launch(Dispatchers.IO) {
             KeywordQueueStore.clear(getApplication())
         }
+    }
+
+    private suspend fun retryErrorKeywords() {
+        val errorItems = _keywordBatch.value
+            .filter { it.status == CheckStatus.ERROR && it.retryCount < 3 }
+        if (errorItems.isEmpty()) return
+        val retryReqs = errorItems.mapNotNull { batchRequests[it.requestId] }
+        if (retryReqs.isEmpty()) return
+        Log.d("TopSearch", "Auto-retry ${retryReqs.size} ERROR keywords")
+        errorItems.forEach { item ->
+            _keywordBatch.update { list ->
+                list.map {
+                    if (it.requestId == item.requestId)
+                        it.copy(status = CheckStatus.PENDING, retryCount = it.retryCount + 1)
+                    else it
+                }
+            }
+        }
+        withContext(Dispatchers.IO) {
+            errorItems.forEach { item ->
+                KeywordQueueStore.updateStatus(getApplication(), item.requestId, CheckStatus.PENDING)
+            }
+        }
+        SearchBridge.resumeRequest.emit(retryReqs)
     }
 
     companion object {

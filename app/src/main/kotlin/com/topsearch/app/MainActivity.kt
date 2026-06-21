@@ -8,16 +8,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import com.topsearch.app.ui.ResultsScreen
 import com.topsearch.app.ui.SearchScreen
 import com.topsearch.app.ui.WebCaptureScreen
 import com.topsearch.app.ui.theme.TopSearchTheme
@@ -57,14 +52,8 @@ class MainActivity : ComponentActivity() {
                 val socketInfo         by viewModel.socketInfo.collectAsState()
                 val isConnected        by viewModel.isConnected.collectAsState()
                 val keywordBatch       by viewModel.keywordBatch.collectAsState()
+                val keywordResults     by viewModel.keywordResults.collectAsState()
                 val pendingQueuePrompt by viewModel.pendingQueuePrompt.collectAsState()
-
-                var viewingResults by remember { mutableStateOf(false) }
-
-                // Reset viewing flag when leaving Done state (new search or reset)
-                LaunchedEffect(state) {
-                    if (state !is SearchState.Done) viewingResults = false
-                }
 
                 if (pendingQueuePrompt) {
                     AlertDialog(
@@ -91,6 +80,7 @@ class MainActivity : ComponentActivity() {
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
                             keywordBatch      = keywordBatch,
+                            keywordResults    = keywordResults,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
@@ -117,36 +107,23 @@ class MainActivity : ComponentActivity() {
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
                             keywordBatch      = keywordBatch,
+                            keywordResults    = keywordResults,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onSearch          = { _, _ -> },
                         )
 
                     is SearchState.Done ->
-                        if (viewingResults) {
-                            ResultsScreen(
-                                keyword        = s.keyword,
-                                results        = s.results,
-                                screenshotPath = s.screenshotPath,
-                                city           = s.city,
-                                proxyIp        = s.proxyIp,
-                                socketInfo     = s.socketInfo,
-                                onBack         = { viewingResults = false },
-                                onSearchAgain  = viewModel::reset,
-                            )
-                        } else {
-                            SearchScreen(
-                                skipProxy         = skipProxy,
-                                socketInfo        = socketInfo,
-                                isConnected       = isConnected,
-                                keywordBatch      = keywordBatch,
-                                lastKeyword       = s.keyword,
-                                lastResultCount   = s.results.size,
-                                lastResultInfo    = s.socketInfo,
-                                onViewResults     = { viewingResults = true },
-                                onSkipProxyChange = viewModel::setSkipProxy,
-                                onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
-                            )
-                        }
+                        SearchScreen(
+                            skipProxy         = skipProxy,
+                            socketInfo        = socketInfo,
+                            isConnected       = isConnected,
+                            keywordBatch      = keywordBatch,
+                            keywordResults    = keywordResults,
+                            lastKeyword       = s.keyword,
+                            lastResultInfo    = s.socketInfo,
+                            onSkipProxyChange = viewModel::setSkipProxy,
+                            onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
+                        )
 
                     is SearchState.Error ->
                         SearchScreen(
@@ -156,6 +133,7 @@ class MainActivity : ComponentActivity() {
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
                             keywordBatch      = keywordBatch,
+                            keywordResults    = keywordResults,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
