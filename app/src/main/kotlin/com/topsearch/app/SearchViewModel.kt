@@ -283,7 +283,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 showSocketDone(jsResults, keyword, firstPath, city, proxyIp, proxyFull, country)
             } else {
                 _state.value = SearchState.Done(keyword, jsResults, firstPath, city, proxyIp)
-                uploadAsync(screenshotPaths)
+                uploadAsync(screenshotPaths, keyword, jsResults)
             }
             signalDone()
             return
@@ -316,7 +316,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                     showSocketDone(results, keyword, firstPath, city, proxyIp, proxyFull, country)
                 } else {
                     _state.value = SearchState.Done(keyword, results, firstPath, city, proxyIp)
-                    uploadAsync(screenshotPaths)
+                    uploadAsync(screenshotPaths, keyword, results)
                 }
             } catch (e: Exception) {
                 _state.value = if (reqId != null) SearchState.Idle else SearchState.Error("OCR thất bại: ${e.message}", keyword)
@@ -348,10 +348,15 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         _socketInfo.value = ""
     }
 
-    private fun uploadAsync(screenshotPaths: List<String>) {
+    private fun uploadAsync(
+        screenshotPaths: List<String>,
+        keyword: String,
+        results: List<SearchResult>,
+    ) {
         if (screenshotPaths.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
-            TelegramUploader.uploadAll(screenshotPaths)
+            val url = TelegramUploader.uploadFirstThenSendResults(screenshotPaths, keyword, results)
+            Log.d("TopSearch", "Telegram manual upload urlBlank=${url.isBlank()}")
         }
     }
 

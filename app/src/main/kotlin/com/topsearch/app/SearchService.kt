@@ -168,20 +168,24 @@ class SearchService : Service() {
                 val imageUrls = mutableListOf<String>()
                 // Submit: < 10 results = all; >= 10 results = first 10
                 val toSubmit = if (totalCount < 10) results else results.take(10)
-                val caption = buildString {
-                    toSubmit.forEachIndexed { i, r ->
-                        appendLine("[${i + 1}] ${r.domain} → ${r.url}")
-                    }
-                }.trim()
+                val message = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
+                Log.d(TAG, "TELEGRAM messageLen=${message.length} lines=${toSubmit.size}")
                 screenshotPaths.take(1).forEachIndexed { i, path ->
                     Log.d(TAG, "  upload[$i] $path")
-                    val url = TelegramUploader.upload(path, caption)
+                    val url = TelegramUploader.upload(path)
                     if (url.isNotBlank()) {
                         imageUrls.add(url)
                         Log.d(TAG, "  upload[$i] OK -> $url")
                     } else {
                         Log.w(TAG, "  upload[$i] FAILED path=$path")
                     }
+                }
+                if (message.isNotBlank() && imageUrls.isNotEmpty()) {
+                    Log.d(TAG, "TELEGRAM send text after image upload")
+                    val sentText = TelegramUploader.sendMessage(message)
+                    Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
+                } else if (message.isNotBlank()) {
+                    Log.w(TAG, "TELEGRAM skip text message because image upload failed")
                 }
 
                 Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")

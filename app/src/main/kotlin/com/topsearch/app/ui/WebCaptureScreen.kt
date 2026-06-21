@@ -554,6 +554,15 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             }
         }
 
+        function isNimoLikeLink(link) {
+            try {
+                var realUrl = resolveUrl(link);
+                return new URL(realUrl).hostname.toLowerCase().indexOf('nimo') >= 0;
+            } catch(e) {
+                return false;
+            }
+        }
+
         function cleanTitle(text) {
             return (text || '').replace(/\s+/g, ' ').trim();
         }
@@ -601,6 +610,32 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             return lines.length >= 3 ? lines.slice(2).join(' ') : (lines[1] || lines[0] || '');
         }
 
+        function isOrganicDirectLink(link) {
+            return !!(link && link.matches && link.matches('a.zReHs[href], a[jsname="UWckNb"][href]'));
+        }
+
+        function titleFromOrganicDirectLink(link, domain) {
+            var card = link.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid]') || link;
+            var titleEl = link.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') ||
+                          (card.querySelector ? card.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') : null);
+            var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+            if (title.length >= 3) return title;
+
+            var lines = (card.innerText || card.textContent || '').split('\n')
+                .map(function(l) { return cleanTitle(l); })
+                .filter(function(l) {
+                    if (!l || l.length < 3 || l.length > 200) return false;
+                    var n = norm(l);
+                    if (n.indexOf('http') === 0) return false;
+                    if (domain && n === norm(domain)) return false;
+                    if (n.indexOf('nha tai tro') >= 0) return false;
+                    if (n.indexOf('ket qua duoc tai tro') >= 0) return false;
+                    if (n === 'sponsored' || n === 'quang cao') return false;
+                    return true;
+                });
+            return lines.length >= 3 ? lines.slice(2).join(' ') : (lines[1] || lines[0] || '');
+        }
+
         function addResult(link, requireH3) {
             if (requireH3 && !link.querySelector('h3')) return;
             if (isAdBlock(link)) return;
@@ -613,7 +648,9 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
                 var u = new URL(realUrl);
                 var title = requireH3
                     ? cleanTitle(link.querySelector('h3').innerText || link.querySelector('h3').textContent || '')
-                    : (isPlayGoogleLink(link) ? titleFromPlayGoogleLink(link, u.hostname) : titleFromMobileLink(link, u.hostname));
+                    : (isPlayGoogleLink(link)
+                        ? titleFromPlayGoogleLink(link, u.hostname)
+                        : ((isOrganicDirectLink(link) || isNimoLikeLink(link)) ? titleFromOrganicDirectLink(link, u.hostname) : titleFromMobileLink(link, u.hostname)));
                 if (!title || title.length < 3 || title.length > 200) return;
 
                 seen[realUrl] = true;
@@ -622,11 +659,23 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
         }
 
         // Primary: same idea as backend CheckRankListResult.
-        var redirectLinks = document.querySelectorAll('a[href^="/url?q="], a[href*="/url?q="], a[href*="google.com/url?"]');
+        var redirectLinks = document.querySelectorAll(
+            'a[href^="/url?q="], a[href*="/url?q="], a[href*="google.com/url?"]'
+        );
         for (var i = 0; i < redirectLinks.length && results.length < 20; i++) {
             addResult(redirectLinks[i], true);
         }
         var primaryCount = results.length;
+
+        // Modern/mobile organic cards can use direct zReHs/UWckNb links instead of /url?q=.
+        // Nimo-related domains may appear as direct media/result links, so keep them in this pass too.
+        if (primaryCount > 0) {
+            var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"]');
+            for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
+                if (!isOrganicDirectLink(organicDirectLinks[o]) && !isNimoLikeLink(organicDirectLinks[o])) continue;
+                addResult(organicDirectLinks[o], false);
+            }
+        }
 
         // Special case: Google Play organic results often use direct href instead of /url?q=.
         if (primaryCount > 0) {
@@ -639,7 +688,7 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 
         // Mobile fallback: Google WebView often renders direct result cards as a.UBFage and h3=0.
         if (primaryCount === 0) {
-            var mobileLinks = document.querySelectorAll('a.UBFage[href], a[href].UBFage, a[href^="https://play.google."], a[href^="http://play.google."]');
+            var mobileLinks = document.querySelectorAll('a.UBFage[href], a[href].UBFage, a[href^="https://play.google."], a[href^="http://play.google."], a[href*="nimo"]');
             for (var j = 0; j < mobileLinks.length && results.length < 20; j++) {
                 addResult(mobileLinks[j], false);
             }

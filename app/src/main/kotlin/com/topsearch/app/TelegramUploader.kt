@@ -5,6 +5,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.charset.StandardCharsets
 
 private const val TAG       = "TelegramUploader"
 private const val BOT_TOKEN = "8642171462:AAEq1woSJt7G7P-VfBPe6KDdzH1xSFQd5oo"
@@ -13,6 +14,34 @@ private const val FILE_BASE = "https://api.telegram.org/file/bot$BOT_TOKEN"
 private const val BOT_BASE  = "https://api.telegram.org/bot$BOT_TOKEN"
 
 object TelegramUploader {
+
+    fun buildResultMessage(keyword: String, items: List<SearchResult>, maxItems: Int = 10): String {
+        if (items.isEmpty()) return ""
+        val lines = mutableListOf("Keyword: $keyword")
+        for (r in items.take(maxItems)) {
+            val line = "[${r.rank}, ${r.domain}, ${r.url}]"
+            val next = (lines + line).joinToString("\n")
+            if (next.length > 950) {
+                lines += "..."
+                break
+            }
+            lines += line
+        }
+        return lines.joinToString("\n")
+    }
+
+    fun uploadFirstThenSendResults(paths: List<String>, keyword: String, items: List<SearchResult>): String {
+        val firstPath = paths.firstOrNull().orEmpty()
+        val imageUrl = upload(firstPath)
+        val message = buildResultMessage(keyword, items)
+        if (imageUrl.isNotBlank() && message.isNotBlank()) {
+            val sent = sendMessage(message)
+            Log.d(TAG, "result message sent=$sent")
+        } else if (message.isNotBlank()) {
+            Log.w(TAG, "skip result message because image upload failed")
+        }
+        return imageUrl
+    }
 
     /**
      * Upload all local JPEGs, return list of public URLs (skips failures).
@@ -32,7 +61,7 @@ object TelegramUploader {
         if (filePath.isBlank()) return ""
         val file = File(filePath)
         if (!file.exists()) { Log.e(TAG, "File not found: $filePath"); return "" }
-        Log.d(TAG, "upload: ${file.name}  size=${file.length()}B")
+        Log.d(TAG, "upload: ${file.name}  size=${file.length()}B captionLen=${caption.length}")
         return try {
             val fileId = sendDocument(file, caption) ?: return ""
             Log.d(TAG, "  file_id = $fileId")
@@ -44,6 +73,39 @@ object TelegramUploader {
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed: ${e.message}")
             ""
+        }
+    }
+
+    fun sendMessage(text: String): Boolean {
+        if (text.isBlank()) return false
+        return try {
+            val body = JSONObject()
+                .put("chat_id", CHAT_ID)
+                .put("text", text)
+                .put("disable_web_page_preview", true)
+                .toString()
+            val conn = (URL("$BOT_BASE/sendMessage").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 10_000
+                readTimeout = 20_000
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            }
+            conn.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+            val code = conn.responseCode
+            val response = if (code == 200) conn.inputStream.bufferedReader().readText()
+                           else conn.errorStream?.bufferedReader()?.readText() ?: ""
+            Log.d(TAG, "sendMessage HTTP $code body=${response.take(500)}")
+            val json = JSONObject(response)
+            if (!json.optBoolean("ok")) {
+                Log.e(TAG, "sendMessage($code): $response")
+                false
+            } else {
+                true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "sendMessage failed: ${e.message}")
+            false
         }
     }
 
@@ -89,4 +151,5 @@ object TelegramUploader {
         if (!json.optBoolean("ok")) { Log.e(TAG, "getFile: $body"); return null }
         return json.getJSONObject("result").getString("file_path")
     }
+
 }
