@@ -83,12 +83,15 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         viewModelScope.launch {
             SearchBridge.incomingBatch.collect { requests ->
                 _pendingQueuePrompt.value = false  // dismiss resume dialog if server sends fresh batch
-                _keywordBatch.value = requests.map { KeywordBatchItem(it.requestId, it.keyword) }
+                val newItems = requests.map { KeywordBatchItem(it.requestId, it.keyword) }
+                _keywordBatch.value = newItems + _keywordBatch.value
                 val ctx = getApplication<Application>()
                 launch(Dispatchers.IO) {
-                    KeywordQueueStore.save(ctx, requests.map {
+                    val existing = KeywordQueueStore.load(ctx) ?: emptyList()
+                    val newEntries = requests.map {
                         KeywordQueueStore.Entry(it.requestId, it.keyword, it.proxy, it.country)
-                    })
+                    }
+                    KeywordQueueStore.save(ctx, newEntries + existing)
                 }
                 requests.forEach { batchRequests[it.requestId] = it }
             }
