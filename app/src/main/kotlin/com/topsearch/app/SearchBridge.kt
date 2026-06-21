@@ -24,6 +24,9 @@ object SearchBridge {
     /** Trạng thái kết nối WebSocket — Service cập nhật, UI observe */
     val isConnected = MutableStateFlow(false)
 
+    /** true when ViewModel is processing one queued keyword */
+    val isProcessing = MutableStateFlow(false)
+
     /** Service → ViewModel: new keyword to search */
     val incoming = MutableSharedFlow<SocketRequest>(extraBufferCapacity = 64)
 

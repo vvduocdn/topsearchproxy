@@ -159,9 +159,7 @@ class SignalRClient(
         if (batch.isEmpty()) return
         Log.d(TAG, "CheckKeywords: ${batch.size} keywords")
         batch.forEachIndexed { i, r -> Log.d(TAG, "  [$i] \"${r.keyword}\" proxy=${r.proxy} reqId=${r.requestId}") }
-        // Emit batch first so UI sets PENDING state before keywords arrive in queue
         onBatch(batch)
-        batch.forEach { r -> onKeyword(r.requestId, r.keyword, r.proxy, r.country) }
     }
 
     private fun handleCheckKeyword(json: JSONObject) {
@@ -173,6 +171,5 @@ class SignalRClient(
         val country   = payload.optInt("country", 1)
         Log.d(TAG, "CheckKeyword (single): \"$keyword\" proxy=$proxy reqId=$requestId")
         onBatch(listOf(SearchBridge.SocketRequest(requestId, keyword, proxy, country)))
-        onKeyword(requestId, keyword, proxy, country)
     }
 }

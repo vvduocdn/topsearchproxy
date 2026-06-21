@@ -20,6 +20,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private const val TAG        = "SearchService"
 private const val CHANNEL_ID = "topsearch_socket"
@@ -30,27 +32,36 @@ private const val WS_URL     =
 class SearchService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val enqueueMutex = Mutex()
     private var activeClient: SignalRClient? = null
     private var sourceName: String = ""
-
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    private var workersStarted = false
 
     override fun onCreate() {
         super.onCreate()
         val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         sourceName = "${Build.MANUFACTURER} ${Build.MODEL} (${androidId.take(8)})"
-        Log.d(TAG, "sourceName = $sourceName")
+        Log.d(TAG, "sourceName=$sourceName")
         createChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, buildNotif("Đang kết nối..."), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            startForeground(
+                NOTIF_ID,
+                buildNotif("Dang ket noi..."),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
         } else {
-            startForeground(NOTIF_ID, buildNotif("Đang kết nối..."))
+            startForeground(NOTIF_ID, buildNotif("Dang ket noi..."))
         }
-        scope.launch { connectLoop() }
-        scope.launch { observeResumeRequests() }
+
+        // Service can be started multiple times by MainActivity; start workers once only.
+        if (!workersStarted) {
+            workersStarted = true
+            scope.launch { connectLoop() }
+            scope.launch { observeResumeRequests() }
+        }
         return START_STICKY
     }
 
@@ -61,8 +72,6 @@ class SearchService : Service() {
         activeClient?.disconnect()
         super.onDestroy()
     }
-
-    // ── Connection ─────────────────────────────────────────────────────────────
 
     private suspend fun connectLoop() {
         while (scope.isActive) {
@@ -76,86 +85,115 @@ class SearchService : Service() {
             activeClient = client
             client.connect()
             SearchBridge.isConnected.value = true
-            showNotif("Đã kết nối — đang chờ keyword")
-            gone.await()   // block until WS closes unexpectedly
+            showNotif("Da ket noi - dang cho keyword")
+
+            gone.await()
+
             SearchBridge.isConnected.value = false
-            showNotif("Mất kết nối — đang kết nối lại...")
-            Log.w(TAG, "Disconnected — retry in 5s")
+            showNotif("Mat ket noi - dang ket noi lai...")
+            Log.w(TAG, "Disconnected - retry in 5s")
             delay(5_000)
         }
     }
 
-    // ── Batch handler ──────────────────────────────────────────────────────────
-
     private fun onBatch(requests: List<SearchBridge.SocketRequest>) {
-        scope.launch { SearchBridge.incomingBatch.emit(requests) }
+        enqueueRequests(requests, publishBatch = true)
     }
-
-    // ── Resume handler (crash recovery) ───────────────────────────────────────
 
     private suspend fun observeResumeRequests() {
         SearchBridge.resumeRequest.collect { requests ->
-            Log.d(TAG, "Resume: re-queuing ${requests.size} pending keywords")
-            requests.forEach { req -> onKeyword(req.requestId, req.keyword, req.proxy, req.country) }
+            Log.d(TAG, "Resume: re-queue ${requests.size} pending keyword(s)")
+            enqueueRequests(requests, publishBatch = false)
         }
     }
 
-    // ── Keyword handler ────────────────────────────────────────────────────────
-
     private fun onKeyword(requestId: String, keyword: String, proxy: String, country: Int) {
-        Log.d(TAG, "CheckKeyword: \"$keyword\" reqId=$requestId proxy=$proxy")
-        showNotif("Đang search: $keyword")
+        enqueueRequests(
+            listOf(SearchBridge.SocketRequest(requestId, keyword, proxy, country)),
+            publishBatch = true,
+        )
+    }
 
-        // Register result callback before emitting so ViewModel can call it
-        SearchBridge.registerCallback(requestId) { results, screenshotPaths, publicIp ->
-            scope.launch {
-                Log.d(TAG, "▶ CALLBACK fired reqId=$requestId publicIp=$publicIp")
-                Log.d(TAG, "  results count = ${results.size}")
-                Log.d(TAG, "  screenshotPaths count = ${screenshotPaths.size}")
-                screenshotPaths.forEachIndexed { i, p ->
-                    val file = java.io.File(p)
-                    Log.d(TAG, "  path[$i] = $p  exists=${file.exists()}  size=${file.length()}B")
-                }
+    private fun enqueueRequests(requests: List<SearchBridge.SocketRequest>, publishBatch: Boolean) {
+        val valid = requests.filter { it.requestId.isNotBlank() && it.keyword.isNotBlank() }
+        if (valid.isEmpty()) {
+            Log.w(TAG, "enqueueRequests ignored empty/invalid batch size=${requests.size}")
+            return
+        }
 
-                Log.d(TAG, "▶ TELEGRAM UPLOAD START (${screenshotPaths.size} files)")
-                val imageUrls = mutableListOf<String>()
-                screenshotPaths.forEachIndexed { i, path ->
-                    Log.d(TAG, "  uploading[$i] $path …")
-                    val url = TelegramUploader.upload(path)
-                    if (url.isNotBlank()) {
-                        Log.d(TAG, "  ✓ uploaded[$i] → $url")
-                        imageUrls += url
-                    } else {
-                        Log.w(TAG, "  ✗ upload FAILED[$i] path=$path")
-                    }
-                }
-                Log.d(TAG, "▶ TELEGRAM UPLOAD DONE: ${imageUrls.size}/${screenshotPaths.size} succeeded")
-                imageUrls.forEachIndexed { i, u -> Log.d(TAG, "  url[$i] = $u") }
+        // Register callback before enqueue so ViewModel can dispatch safely.
+        valid.forEach { req ->
+            Log.d(TAG, "Queue keyword '${req.keyword}' reqId=${req.requestId} proxy=${req.proxy} country=${req.country}")
+            registerResultCallback(req)
+        }
 
-                Log.d(TAG, "▶ SUBMIT reqId=$requestId items=${results.size} images=${imageUrls.size} publicIp=$publicIp")
-                results.forEachIndexed { i, r ->
-                    Log.d(TAG, "  result[$i] rank=${r.rank} domain=${r.domain} url=${r.url}")
-                }
-                activeClient?.submit(requestId, results, imageUrls, publicIp, sourceName)
-                    ?: Log.e(TAG, "  ✗ activeClient is null — result NOT sent!")
-                showNotif("Đã gửi kết quả — chờ keyword tiếp theo")
-            }
+        val alreadyProcessing = SearchBridge.isProcessing.value
+        showNotif("Dang search: ${valid.first().keyword}${if (valid.size > 1) " (+${valid.size - 1})" else ""}")
+        if (alreadyProcessing) {
+            Log.d(TAG, "Already processing; appended ${valid.size} keyword(s) to queue only")
+        } else {
+            startMainActivity()
         }
 
         scope.launch {
-            SearchBridge.incoming.emit(
-                SearchBridge.SocketRequest(requestId, keyword, proxy, country)
-            )
+            enqueueMutex.withLock {
+                // Give Activity/ViewModel a moment to start collecting SharedFlow when newly opened.
+                if (!alreadyProcessing) delay(300)
+                if (publishBatch) SearchBridge.incomingBatch.emit(valid)
+                valid.forEach { req ->
+                    Log.d(TAG, "Emit to ViewModel '${req.keyword}' reqId=${req.requestId}")
+                    SearchBridge.incoming.emit(req)
+                }
+            }
         }
+    }
 
-        // Bring MainActivity to foreground so WebView can run
+    private fun registerResultCallback(req: SearchBridge.SocketRequest) {
+        val requestId = req.requestId
+        SearchBridge.registerCallback(requestId) { results, screenshotPaths, publicIp ->
+            scope.launch {
+                Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp")
+                Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
+                if (results.isEmpty() && screenshotPaths.isEmpty()) {
+                    Log.w(TAG, "Skip empty submit reqId=$requestId keyword='${req.keyword}'")
+                    showNotif("Ket qua rong - bo qua submit")
+                    return@launch
+                }
+                screenshotPaths.forEachIndexed { i, p ->
+                    val file = java.io.File(p)
+                    Log.d(TAG, "  screenshot[$i]=$p exists=${file.exists()} size=${file.length()}B")
+                }
+
+                val imageUrls = mutableListOf<String>()
+                screenshotPaths.take(1).forEachIndexed { i, path ->
+                    Log.d(TAG, "  upload[$i] $path")
+                    val url = TelegramUploader.upload(path)
+                    if (url.isNotBlank()) {
+                        imageUrls += url
+                        Log.d(TAG, "  upload[$i] OK -> $url")
+                    } else {
+                        Log.w(TAG, "  upload[$i] FAILED path=$path")
+                    }
+                }
+
+                Log.d(TAG, "SUBMIT reqId=$requestId items=${results.size} images=${imageUrls.size} publicIp=$publicIp")
+                results.take(10).forEachIndexed { i, r ->
+                    Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
+                }
+
+                activeClient?.submit(requestId, results, imageUrls, publicIp, sourceName)
+                    ?: Log.e(TAG, "activeClient is null - result not sent")
+                showNotif("Da gui ket qua - cho keyword tiep theo")
+            }
+        }
+    }
+
+    private fun startMainActivity() {
         val i = Intent(this, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         startActivity(i)
     }
-
-    // ── Notification ───────────────────────────────────────────────────────────
 
     private fun showNotif(text: String) {
         getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotif(text))
@@ -163,7 +201,8 @@ class SearchService : Service() {
 
     private fun buildNotif(text: String): Notification {
         val pi = PendingIntent.getActivity(
-            this, 0,
+            this,
+            0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )

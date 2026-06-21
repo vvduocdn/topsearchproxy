@@ -118,6 +118,15 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     }
 
     private suspend fun processSocketRequest(req: SearchBridge.SocketRequest) {
+        SearchBridge.isProcessing.value = true
+        try {
+            processSocketRequestInternal(req)
+        } finally {
+            SearchBridge.isProcessing.value = false
+        }
+    }
+
+    private suspend fun processSocketRequestInternal(req: SearchBridge.SocketRequest) {
         val kw = req.keyword.trim().ifBlank { return }
         socketDoneJob?.cancel()
         socketRequestId = req.requestId
