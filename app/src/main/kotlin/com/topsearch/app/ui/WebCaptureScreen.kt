@@ -136,7 +136,7 @@ private val EXTRACT_JS = """
         var EXCLUDE = [
             '#tads', '#tadsb',
             '[data-text-ad]', '.uEierd', '.pla-unit',
-            '.related-question-pair', '.ifM9O',
+            '.related-question-pair',
             '.kp-wholepage', '.osrp-blk', '.I6TXqe',
             '[aria-label="Ads"]'
         ];
@@ -167,10 +167,21 @@ private val EXTRACT_JS = """
             try { return new URL(href).hostname.replace(/^www\./, ''); } catch(e) { return ''; }
         }
 
+        function resolveHref(href) {
+            try {
+                var url = new URL(href);
+                if (url.hostname.indexOf('google.') >= 0) {
+                    var q = url.searchParams.get('q') || url.searchParams.get('url');
+                    if (q && q.indexOf('http') === 0) return q;
+                }
+                return href;
+            } catch(e) { return href; }
+        }
+
         function tryAdd(title, aTag) {
             if (!title || title.length < 3 || title.length > 200 || seen[title]) return false;
             if (!aTag) return false;
-            var href = aTag.href || '';
+            var href = resolveHref(aTag.href || '');
             if (!href || href.indexOf('http') !== 0) return false;
             if (isAdLink(aTag) || isExcluded(aTag)) return false;
             var d = getDomain(href);
