@@ -180,10 +180,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
         // Suspend until WebCapture finishes (onWebCaptureDone / onWebCaptureError)
         withTimeoutOrNull(3 * 60 * 1_000L) { done.await() } ?: run {
-            Log.w("TopSearch", "processSocketRequest TIMEOUT '$kw' — dispatching empty and moving on")
+            Log.w("TopSearch", "processSocketRequest TIMEOUT '$kw'")
             currentDone = null
             updateBatchStatus(req.requestId, CheckStatus.ERROR)
-            SearchBridge.dispatchResult(req.requestId, emptyList(), publicIp = proxyIp)
             _state.value = SearchState.Idle
             val suffix = if (pendingQueueCount > 0) " — $pendingQueueCount keyword đang chờ" else ""
             _socketInfo.value = "Hết giờ: \"$kw\"$suffix"
@@ -267,8 +266,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         if (screenshotPaths.isEmpty()) {
             _state.value = SearchState.Error("Không lấy được kết quả", keyword)
             if (reqId != null) {
-                updateBatchStatus(reqId, CheckStatus.DONE)
-                SearchBridge.dispatchResult(reqId, emptyList(), publicIp = proxyIp)
+                updateBatchStatus(reqId, CheckStatus.ERROR)
                 showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
             }
             signalDone()
@@ -284,8 +282,12 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                     reqId?.let { _keywordResults.value = _keywordResults.value + (it to results) }
                 }
                 if (reqId != null) {
-                    updateBatchStatus(reqId, CheckStatus.DONE)
-                    SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp)
+                    if (results.isNotEmpty()) {
+                        updateBatchStatus(reqId, CheckStatus.DONE)
+                        SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp)
+                    } else {
+                        updateBatchStatus(reqId, CheckStatus.ERROR)
+                    }
                     showSocketDone(results, keyword, firstPath, city, proxyIp, proxyFull, country)
                 } else {
                     _state.value = SearchState.Done(keyword, results, firstPath, city, proxyIp)
@@ -295,7 +297,6 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 _state.value = if (reqId != null) SearchState.Idle else SearchState.Error("OCR thất bại: ${e.message}", keyword)
                 reqId?.let {
                     updateBatchStatus(it, CheckStatus.ERROR)
-                    SearchBridge.dispatchResult(it, emptyList(), screenshotPaths, proxyIp)
                     showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
                 }
             }
@@ -309,7 +310,6 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val proxyIp   = capturing?.proxyIp ?: ""
         if (reqId != null) {
             updateBatchStatus(reqId, CheckStatus.ERROR)
-            SearchBridge.dispatchResult(reqId, emptyList(), publicIp = proxyIp)
             showSocketDone(emptyList(), keyword, "", "", proxyIp,
                 capturing?.proxyHost ?: "", capturing?.country ?: 1)
         } else {
