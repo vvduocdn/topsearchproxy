@@ -30,6 +30,9 @@ object SearchBridge {
     /** Full batch notification — ViewModel collects to populate batch status UI */
     val incomingBatch = MutableSharedFlow<List<SocketRequest>>(extraBufferCapacity = 8)
 
+    /** ViewModel → Service: re-queue pending keywords after app restart (crash recovery) */
+    val resumeRequest = MutableSharedFlow<List<SocketRequest>>(extraBufferCapacity = 8)
+
     /** ViewModel → Service: search results ready (screenshotPaths empty if capture failed) */
     fun dispatchResult(
         requestId:     String,

@@ -50,6 +50,7 @@ class SearchService : Service() {
             startForeground(NOTIF_ID, buildNotif("Đang kết nối..."))
         }
         scope.launch { connectLoop() }
+        scope.launch { observeResumeRequests() }
         return START_STICKY
     }
 
@@ -88,6 +89,15 @@ class SearchService : Service() {
 
     private fun onBatch(requests: List<SearchBridge.SocketRequest>) {
         scope.launch { SearchBridge.incomingBatch.emit(requests) }
+    }
+
+    // ── Resume handler (crash recovery) ───────────────────────────────────────
+
+    private suspend fun observeResumeRequests() {
+        SearchBridge.resumeRequest.collect { requests ->
+            Log.d(TAG, "Resume: re-queuing ${requests.size} pending keywords")
+            requests.forEach { req -> onKeyword(req.requestId, req.keyword, req.proxy, req.country) }
+        }
     }
 
     // ── Keyword handler ────────────────────────────────────────────────────────

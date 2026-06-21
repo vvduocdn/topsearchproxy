@@ -51,6 +51,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private val _keywordBatch = MutableStateFlow<List<KeywordBatchItem>>(emptyList())
     val keywordBatch: StateFlow<List<KeywordBatchItem>> = _keywordBatch.asStateFlow()
 
+    /** true = hiện dialog hỏi user có muốn tiếp tục queue chưa xong sau khi app bị kill */
+    private val _pendingQueuePrompt = MutableStateFlow(false)
+    val pendingQueuePrompt: StateFlow<Boolean> = _pendingQueuePrompt.asStateFlow()
+
     fun setSkipProxy(skip: Boolean) { _skipProxy.value = skip }
 
     // requestId của CheckKeyword đang xử lý (null nếu search thủ công từ UI)
@@ -68,10 +72,17 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private fun cacheKey(keyword: String, country: Int) = "${keyword.trim().lowercase()}_$country"
 
     init {
-        // Populate batch status list when server sends a new batch
+        // Populate batch status list when server sends a new batch; persist to disk for crash recovery
         viewModelScope.launch {
             SearchBridge.incomingBatch.collect { requests ->
+                _pendingQueuePrompt.value = false  // dismiss resume dialog if server sends fresh batch
                 _keywordBatch.value = requests.map { KeywordBatchItem(it.requestId, it.keyword) }
+                val ctx = getApplication<Application>()
+                launch(Dispatchers.IO) {
+                    KeywordQueueStore.save(ctx, requests.map {
+                        KeywordQueueStore.Entry(it.requestId, it.keyword, it.proxy, it.country)
+                    })
+                }
             }
         }
         // Forward incoming socket requests to the sequential queue
@@ -172,6 +183,13 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private fun updateBatchStatus(requestId: String, status: CheckStatus) {
         _keywordBatch.update { list ->
             list.map { if (it.requestId == requestId) it.copy(status = status) else it }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val ctx = getApplication<Application>()
+            KeywordQueueStore.updateStatus(ctx, requestId, status)
+            if (_keywordBatch.value.all { it.status == CheckStatus.DONE }) {
+                KeywordQueueStore.clear(ctx)
+            }
         }
     }
 
@@ -327,6 +345,44 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 delay(4_000)
                 if (_socketInfo.value == msg) _socketInfo.value = ""
             }
+        }
+    }
+
+    // ── Crash-recovery queue ──────────────────────────────────────────────────
+
+    fun checkPendingQueue() {
+        if (_pendingQueuePrompt.value || _keywordBatch.value.isNotEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (KeywordQueueStore.hasPending(getApplication())) {
+                _pendingQueuePrompt.value = true
+            }
+        }
+    }
+
+    fun resumePendingQueue() {
+        _pendingQueuePrompt.value = false
+        val ctx = getApplication<Application>()
+        val entries = KeywordQueueStore.load(ctx) ?: return
+        val pending = entries.filter { it.status != CheckStatus.DONE }
+        _keywordBatch.value = entries.map {
+            KeywordBatchItem(
+                requestId = it.requestId,
+                keyword   = it.keyword,
+                status    = if (it.status == CheckStatus.DONE) CheckStatus.DONE else CheckStatus.PENDING,
+            )
+        }
+        viewModelScope.launch {
+            SearchBridge.resumeRequest.emit(
+                pending.map { SearchBridge.SocketRequest(it.requestId, it.keyword, it.proxy, it.country) }
+            )
+            Log.d("TopSearch", "Resumed ${pending.size}/${entries.size} keywords from persistent store")
+        }
+    }
+
+    fun dismissPendingPrompt() {
+        _pendingQueuePrompt.value = false
+        viewModelScope.launch(Dispatchers.IO) {
+            KeywordQueueStore.clear(getApplication())
         }
     }
 

@@ -14,6 +14,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import com.topsearch.app.ui.ResultsScreen
 import com.topsearch.app.ui.SearchScreen
 import com.topsearch.app.ui.WebCaptureScreen
@@ -45,20 +48,40 @@ class MainActivity : ComponentActivity() {
 
         // Khởi động service WebSocket — nhận keyword từ server
         SearchService.start(this)
+        viewModel.checkPendingQueue()
 
         setContent {
             TopSearchTheme {
-                val state        by viewModel.state.collectAsState()
-                val skipProxy    by viewModel.skipProxy.collectAsState()
-                val socketInfo   by viewModel.socketInfo.collectAsState()
-                val isConnected  by viewModel.isConnected.collectAsState()
-                val keywordBatch by viewModel.keywordBatch.collectAsState()
+                val state              by viewModel.state.collectAsState()
+                val skipProxy          by viewModel.skipProxy.collectAsState()
+                val socketInfo         by viewModel.socketInfo.collectAsState()
+                val isConnected        by viewModel.isConnected.collectAsState()
+                val keywordBatch       by viewModel.keywordBatch.collectAsState()
+                val pendingQueuePrompt by viewModel.pendingQueuePrompt.collectAsState()
 
                 var viewingResults by remember { mutableStateOf(false) }
 
                 // Reset viewing flag when leaving Done state (new search or reset)
                 LaunchedEffect(state) {
                     if (state !is SearchState.Done) viewingResults = false
+                }
+
+                if (pendingQueuePrompt) {
+                    AlertDialog(
+                        onDismissRequest = { viewModel.dismissPendingPrompt() },
+                        title   = { Text("Có keyword chưa hoàn thành") },
+                        text    = { Text("Bạn có muốn tiếp tục search các keyword còn lại không?") },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.resumePendingQueue() }) {
+                                Text("Tiếp tục")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { viewModel.dismissPendingPrompt() }) {
+                                Text("Bỏ qua")
+                            }
+                        },
+                    )
                 }
 
                 when (val s = state) {
