@@ -84,7 +84,6 @@ fun SearchScreen(
     socketInfo:        String               = "",
     isConnected:       Boolean              = false,
     lastKeyword:       String               = "",
-    lastResultCount:   Int                  = 0,
     lastResultInfo:    String               = "",
     keywordBatch:      List<KeywordBatchItem>            = emptyList(),
     keywordResults:    Map<String, List<SearchResult>>   = emptyMap(),
