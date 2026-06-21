@@ -22,6 +22,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.topsearch.app.TelegramUploader
 
 private const val TAG        = "SearchService"
 private const val CHANNEL_ID = "topsearch_socket"
@@ -150,9 +151,9 @@ class SearchService : Service() {
 
     private fun registerResultCallback(req: SearchBridge.SocketRequest) {
         val requestId = req.requestId
-        SearchBridge.registerCallback(requestId) { results, screenshotPaths, publicIp ->
+        SearchBridge.registerCallback(requestId) { results, screenshotPaths, publicIp, totalCount ->
             scope.launch {
-                Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp")
+                Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount")
                 Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
                 if (results.isEmpty() && screenshotPaths.isEmpty()) {
                     Log.w(TAG, "Skip empty submit reqId=$requestId keyword='${req.keyword}'")
@@ -165,23 +166,30 @@ class SearchService : Service() {
                 }
 
                 val imageUrls = mutableListOf<String>()
+                // Submit: < 10 results = all; >= 10 results = first 10
+                val toSubmit = if (totalCount < 10) results else results.take(10)
+                val caption = buildString {
+                    toSubmit.forEachIndexed { i, r ->
+                        appendLine("[${i + 1}] ${r.domain} → ${r.url}")
+                    }
+                }.trim()
                 screenshotPaths.take(1).forEachIndexed { i, path ->
                     Log.d(TAG, "  upload[$i] $path")
-                    val url = TelegramUploader.upload(path)
+                    val url = TelegramUploader.upload(path, caption)
                     if (url.isNotBlank()) {
-                        imageUrls += url
+                        imageUrls.add(url)
                         Log.d(TAG, "  upload[$i] OK -> $url")
                     } else {
                         Log.w(TAG, "  upload[$i] FAILED path=$path")
                     }
                 }
 
-                Log.d(TAG, "SUBMIT reqId=$requestId items=${results.size} images=${imageUrls.size} publicIp=$publicIp")
-                results.take(10).forEachIndexed { i, r ->
+                Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")
+                toSubmit.forEachIndexed { i, r ->
                     Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
                 }
 
-                activeClient?.submit(requestId, results, imageUrls, publicIp, sourceName)
+                activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName)
                     ?: Log.e(TAG, "activeClient is null - result not sent")
                 showNotif("Da gui ket qua - cho keyword tiep theo")
             }
@@ -193,10 +201,6 @@ class SearchService : Service() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         startActivity(i)
-    }
-
-    private fun showNotif(text: String) {
-        getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotif(text))
     }
 
     private fun buildNotif(text: String): Notification {
@@ -213,6 +217,10 @@ class SearchService : Service() {
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
+    }
+
+    private fun showNotif(text: String) {
+        getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotif(text))
     }
 
     private fun createChannel() {

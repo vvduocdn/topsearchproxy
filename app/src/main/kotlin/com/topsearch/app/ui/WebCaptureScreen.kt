@@ -142,9 +142,16 @@ private val EXTRACT_JS = """
         var EXCLUDE = [
             '#tads', '#tadsb',
             '[data-text-ad]', '.uEierd', '.pla-unit',
+            '[data-rw]',
             '.related-question-pair',
             '.kp-wholepage', '.osrp-blk', '.I6TXqe',
-            '[aria-label="Ads"]'
+            '[aria-label="Ads"]',
+            '[aria-label="Quảng cáo"]',
+            '[aria-label="Mọi người cũng hỏi"]',
+            '[aria-label="Kết quả được tài trợ"]',
+            '.mnr-c',
+            '.commercial-unit-desktop-top',
+            '.cu-container'
         ];
 
         function isExcluded(el) {
@@ -155,18 +162,45 @@ private val EXTRACT_JS = """
             return false;
         }
 
-        function isAdLink(el) {
-            var href = el.href || '';
-            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) return true;
-            var block = el.closest ? (el.closest('[data-hveid]') || el.parentElement) : el.parentElement;
-            if (block) {
-                var txt = (block.innerText || block.textContent || '').toLowerCase();
-                var ads = ['quảng cáo', 'sponsored', 'được tài trợ'];
-                for (var n = 0; n < ads.length; n++) {
-                    if (txt.indexOf(ads[n]) >= 0) return true;
-                }
+        function norm(text) {
+            text = (text || '').toLowerCase();
+            try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
+            return text.replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+
+        var AD_KW = ['ket qua duoc tai tro', 'nha tai tro', 'duoc tai tro',
+                     'quang cao', 'sponsored'];
+        function matchAd(t) {
+            for (var i = 0; i < AD_KW.length; i++) if (t.indexOf(AD_KW[i]) >= 0) return true;
+            return false;
+        }
+        function hasAdLabel(el) {
+            if (!el) return false;
+            var t = norm(el.innerText || el.textContent || '');
+            if (t.length > 0 && t.length < 80 && matchAd(t)) return true;
+            if (!el.children || el.children.length === 0) return false;
+            var ft = norm(el.children[0].innerText || el.children[0].textContent || '');
+            if (ft.length > 0 && ft.length < 80 && matchAd(ft)) return true;
+            if (el.children.length > 1) {
+                var lt = norm(el.children[el.children.length-1].innerText || el.children[el.children.length-1].textContent || '');
+                if (lt.length > 0 && lt.length < 80 && matchAd(lt)) return true;
             }
             return false;
+        }
+        function isAd(el) {
+            if (!el) return false;
+            if (isExcluded(el)) return true;
+            var cur = el;
+            for (var i = 0; i < 15 && cur && cur !== document.body; i++) {
+                if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                if (isExcluded(cur)) return true;
+                if (hasAdLabel(cur)) return true;
+                cur = cur.parentElement;
+            }
+            return false;
+        }
+        function isAdUrl(h) {
+            return h.indexOf('/aclk?') >= 0 || h.indexOf('googleadservices') >= 0;
         }
 
         function getDomain(href) {
@@ -189,7 +223,8 @@ private val EXTRACT_JS = """
             if (!aTag) return false;
             var href = resolveHref(aTag.href || '');
             if (!href || href.indexOf('http') !== 0) return false;
-            if (isAdLink(aTag) || isExcluded(aTag)) return false;
+            if (isAdUrl(href)) return false;
+            if (isAd(aTag)) return false;
             if (seen[href]) return false;
             var d = getDomain(href);
             if (!d || d.indexOf('google.') >= 0) return false;
@@ -204,7 +239,7 @@ private val EXTRACT_JS = """
         var h3s = searchRoot.querySelectorAll('h3');
         for (var i = 0; i < h3s.length && out.length < 20; i++) {
             var h3 = h3s[i];
-            if (isExcluded(h3)) continue;
+            if (isAd(h3)) continue;
 
             var title = (h3.innerText || h3.textContent || '').trim();
             if (!title || title.length < 3 || title.length > 200) continue;
@@ -215,7 +250,7 @@ private val EXTRACT_JS = """
                 var par = h3.parentElement;
                 for (var p = 0; p < 6 && par; p++) {
                     var c = par.querySelector('a[href^="http"]');
-                    if (c && !isExcluded(c)) { aTag = c; break; }
+                    if (c && !isAd(c)) { aTag = c; break; }
                     par = par.parentElement;
                 }
             }
@@ -227,7 +262,7 @@ private val EXTRACT_JS = """
             var links = document.querySelectorAll('a.UBFage');
             for (var j = 0; j < links.length && out.length < 20; j++) {
                 var a = links[j];
-                if (isExcluded(a) || isAdLink(a)) continue;
+                if (isAd(a)) continue;
                 var text = (a.innerText || a.textContent || '').trim();
                 if (!text) continue;
                 var lines = text.split('\n')
@@ -260,12 +295,18 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
         var seenCards = [];
 
         var EXCLUDE = [
-            '#tads', '#tadsb', '.pla-unit',
+            '#tads', '#tadsb',
+            '[data-text-ad]', '.uEierd', '.pla-unit',
+            '[data-rw]',
             '.related-question-pair',
             '.kp-wholepage', '.osrp-blk', '.I6TXqe',
             '[aria-label="Ads"]',
             '[aria-label="Quảng cáo"]',
-            '[aria-label="Mọi người cũng hỏi"]'
+            '[aria-label="Mọi người cũng hỏi"]',
+            '[aria-label="Kết quả được tài trợ"]',
+            '.mnr-c',
+            '.commercial-unit-desktop-top',
+            '.cu-container'
         ];
 
         function isExcluded(el) {
@@ -279,19 +320,42 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
         function norm(text) {
             text = (text || '').toLowerCase();
             try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
-            return text;
+            return text.replace(/[^a-z0-9]+/g, ' ').trim();
         }
 
-        function hasSponsorLabel(el) {
+        var AD_KW = ['ket qua duoc tai tro', 'nha tai tro', 'duoc tai tro',
+                     'quang cao', 'sponsored'];
+        function matchAd(t) {
+            for (var i = 0; i < AD_KW.length; i++) if (t.indexOf(AD_KW[i]) >= 0) return true;
+            return false;
+        }
+        function hasAdLabel(el) {
             if (!el) return false;
-            var text = norm(el.innerText || el.textContent || '');
-            return text.indexOf('nha tai tro') >= 0;
+            var t = norm(el.innerText || el.textContent || '');
+            if (t.length > 0 && t.length < 80 && matchAd(t)) return true;
+            if (!el.children || el.children.length === 0) return false;
+            var ft = norm(el.children[0].innerText || el.children[0].textContent || '');
+            if (ft.length > 0 && ft.length < 80 && matchAd(ft)) return true;
+            if (el.children.length > 1) {
+                var lt = norm(el.children[el.children.length-1].innerText || el.children[el.children.length-1].textContent || '');
+                if (lt.length > 0 && lt.length < 80 && matchAd(lt)) return true;
+            }
+            return false;
         }
-
-        function isAdCandidate(aTag, card) {
-            var href = aTag.href || '';
-            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) return true;
-            return hasSponsorLabel(card || aTag);
+        function isAd(el) {
+            if (!el) return false;
+            if (isExcluded(el)) return true;
+            var cur = el;
+            for (var i = 0; i < 15 && cur && cur !== document.body; i++) {
+                if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                if (isExcluded(cur)) return true;
+                if (hasAdLabel(cur)) return true;
+                cur = cur.parentElement;
+            }
+            return false;
+        }
+        function isAdUrl(h) {
+            return h.indexOf('/aclk?') >= 0 || h.indexOf('googleadservices') >= 0;
         }
 
         function getDomain(href) {
@@ -336,7 +400,7 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
                 .map(function(l) { return cleanTitle(l); })
                 .filter(function(l) {
                     var n = norm(l);
-                    return l.length >= 3 && n.indexOf('nha tai tro') < 0 && n.indexOf('http') !== 0;
+                    return l.length >= 3 && !matchAd(n) && n.indexOf('http') !== 0;
                 });
             lines.sort(function(a, b) { return b.length - a.length; });
             return lines[0] || '';
@@ -369,12 +433,12 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
             var aTag = candidate.a;
             var card = candidate.card;
             if (!aTag || !card) return false;
-            if (isExcluded(aTag) || isExcluded(card)) return false;
-            if (isAdCandidate(aTag, card)) return false;
+            if (isAd(aTag) || isAd(card)) return false;
             if (seenCards.indexOf(card) >= 0) return false;
 
             var href = resolveHref(aTag.href || '');
             if (!href || href.indexOf('http') !== 0) return false;
+            if (isAdUrl(href)) return false;
             if (seenHref[href]) return false;
 
             var domain = getDomain(href);
@@ -395,11 +459,12 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
         var links = searchRoot.querySelectorAll('a[href]');
         for (var i = 0; i < links.length; i++) {
             var a = links[i];
-            if (isExcluded(a)) continue;
+            if (isAd(a)) continue;
             var href = resolveHref(a.href || '');
             if (!href || href.indexOf('http') !== 0) continue;
             var domain = getDomain(href);
-            if (!domain || ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0)) continue;
+            if (!domain) continue;
+            if (domain === 'gstatic.com' || domain === 'googleusercontent.com') continue;
             var card = findCard(a);
             candidates.push({ a: a, card: card, y: visualY(card || a) });
         }
@@ -421,26 +486,8 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
 private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 (function() {
     try {
-        var out = [];
-        var seenUrl = {};
-        var seenTitleDomain = {};
-
-        var EXCLUDE = [
-            '#tads', '#tadsb', '.pla-unit',
-            '.related-question-pair',
-            '.kp-wholepage', '.osrp-blk', '.I6TXqe',
-            '[aria-label="Ads"]',
-            '[aria-label="Quảng cáo"]',
-            '[aria-label="Mọi người cũng hỏi"]'
-        ];
-
-        function isExcluded(el) {
-            if (!el || !el.closest) return false;
-            for (var i = 0; i < EXCLUDE.length; i++) {
-                if (el.closest(EXCLUDE[i])) return true;
-            }
-            return false;
-        }
+        var results = [];
+        var seen = {};
 
         function norm(text) {
             text = (text || '').toLowerCase();
@@ -448,162 +495,157 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             return text.replace(/[^a-z0-9]+/g, ' ').trim();
         }
 
-        function cleanTitle(text) {
-            return (text || '')
-                .replace(/\s+/g, ' ')
-                .replace(/^https?:\/\/\S+\s*/i, '')
-                .trim();
-        }
-
-        function hasSponsorLabel(el) {
-            if (!el) return false;
-            return norm(el.innerText || el.textContent || '').indexOf('nha tai tro') >= 0;
-        }
-
-        function visibleY(el) {
-            try {
-                var r = el.getBoundingClientRect();
-                if (r.width <= 0 || r.height <= 0) return null;
-                return window.pageYOffset + r.top;
-            } catch(e) {
-                return null;
+        function isAdBlock(el) {
+            if (!el || !el.closest) return false;
+            if (el.closest('#tads')) return true;
+            if (el.closest('#tadsb')) return true;
+            if (el.closest('[data-text-ad]')) return true;
+            if (el.closest('[aria-label="Ads"]')) return true;
+            if (el.closest('[aria-label="Quảng cáo"]')) return true;
+            if (el.closest('[aria-label="Kết quả được tài trợ"]')) return true;
+            var card = el.closest('.uEierd, .pla-unit, .commercial-unit-desktop-top, .cu-container, [data-snc], [data-hveid]') || el;
+            var nodes = card.querySelectorAll ? card.querySelectorAll('span, div') : [];
+            var limit = Math.min(nodes.length, 120);
+            for (var i = 0; i < limit; i++) {
+                var t = norm(nodes[i].innerText || nodes[i].textContent || '');
+                if (!t || t.length > 70) continue;
+                if (t.indexOf('nha tai tro') >= 0) return true;
+                if (t.indexOf('ket qua duoc tai tro') >= 0) return true;
+                if (t === 'sponsored' || t === 'quang cao') return true;
             }
+            return false;
         }
 
-        function resolveHref(href) {
+        function resolveUrl(link) {
+            var rawHref = link.getAttribute('href') || link.href || '';
+            if (!rawHref) return '';
             try {
-                var url = new URL(href);
-                if (url.hostname.indexOf('google.') >= 0) {
-                    var q = url.searchParams.get('q') || url.searchParams.get('url');
-                    if (q && q.indexOf('http') === 0) return q;
+                var url = new URL(rawHref, 'https://www.google.com');
+                if (url.pathname === '/url' || url.href.indexOf('/url?') >= 0) {
+                    return url.searchParams.get('q') || url.searchParams.get('url') || '';
                 }
-                return href;
+                return url.href;
             } catch(e) {
-                return href;
+                return '';
             }
         }
 
-        function canonicalHref(href) {
+        function allowedUrl(realUrl) {
+            if (!realUrl || realUrl.indexOf('http') !== 0) return false;
+            if (realUrl.indexOf('/aclk?') >= 0) return false;
+            if (realUrl.indexOf('googleadservices') >= 0) return false;
             try {
-                var url = new URL(resolveHref(href));
-                url.hash = '';
-                ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','ved','usg','sa'].forEach(function(k) {
-                    url.searchParams.delete(k);
-                });
-                return url.toString();
+                var host = new URL(realUrl).hostname;
+                if (host.indexOf('google.') >= 0 && host.indexOf('play.google.') !== 0) return false;
+                if (host.indexOf('gstatic.') >= 0) return false;
+                if (host.indexOf('googleusercontent.') >= 0) return false;
+                return true;
             } catch(e) {
-                return resolveHref(href || '');
+                return false;
             }
         }
 
-        function domainOf(href) {
-            try { return new URL(resolveHref(href)).hostname.replace(/^www\./, ''); } catch(e) { return ''; }
-        }
-
-        function findCard(el) {
-            var cur = el;
-            for (var i = 0; i < 9 && cur && cur !== document.body; i++) {
-                if (cur.matches && cur.matches('div.g, .MjjYud, .N54PNb, [data-hveid]')) return cur;
-                cur = cur.parentElement;
+        function isPlayGoogleLink(link) {
+            try {
+                var realUrl = resolveUrl(link);
+                return new URL(realUrl).hostname.indexOf('play.google.') === 0;
+            } catch(e) {
+                return false;
             }
-            return el.parentElement || el;
         }
 
-        function findLink(titleEl, card) {
-            var a = titleEl.closest ? titleEl.closest('a[href]') : null;
-            if (a) return a;
-            var cur = titleEl.parentElement;
-            for (var i = 0; i < 6 && cur; i++) {
-                a = cur.querySelector ? cur.querySelector('a[href^="http"], a[href^="/url"], a[href^="/search"]') : null;
-                if (a) return a;
-                cur = cur.parentElement;
-            }
-            return card && card.querySelector ? card.querySelector('a[href]') : null;
+        function cleanTitle(text) {
+            return (text || '').replace(/\s+/g, ' ').trim();
         }
 
-        function titleFromLink(a, domain) {
-            var lines = (a.innerText || a.textContent || '').split('\n')
+        function titleFromMobileLink(link, domain) {
+            var titleEl = link.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb');
+            var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+            if (title.length >= 3) return title;
+
+            var lines = (link.innerText || link.textContent || '').split('\n')
                 .map(function(l) { return cleanTitle(l); })
                 .filter(function(l) {
-                    if (!l || l.length < 3 || l.length > 90) return false;
+                    if (!l || l.length < 3 || l.length > 200) return false;
                     var n = norm(l);
-                    if (n.indexOf('nha tai tro') >= 0) return false;
                     if (n.indexOf('http') === 0) return false;
-                    if (domain && n.indexOf(norm(domain)) >= 0) return false;
+                    if (domain && n === norm(domain)) return false;
+                    if (n.indexOf('nha tai tro') >= 0) return false;
+                    if (n.indexOf('ket qua duoc tai tro') >= 0) return false;
+                    if (n === 'sponsored' || n === 'quang cao') return false;
                     return true;
                 });
-            if (lines.length === 0) return '';
-            return lines[0];
+            return lines.length >= 3 ? lines.slice(2).join(' ') : (lines[1] || lines[0] || '');
         }
 
-        var root = document.querySelector('#rso, #search') || document.body;
-        var headings = root.querySelectorAll('h3, [role="heading"], .LC20lb');
-        var candidates = [];
+        function titleFromPlayGoogleLink(link, domain) {
+            var card = link.closest('[data-snc], .N54PNb, .MjjYud, [data-hveid], .uIV6Ge') || link;
+            var titleEl = link.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') ||
+                          (card.querySelector ? card.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') : null);
+            var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+            if (title.length >= 3 && norm(title) !== 'google play') return title;
 
-        for (var i = 0; i < headings.length; i++) {
-            var h = headings[i];
-            if (isExcluded(h)) continue;
-
-            var title = cleanTitle(h.innerText || h.textContent || '');
-            if (!title || title.length < 3 || title.length > 200) continue;
-
-            var y = visibleY(h);
-            if (y === null || y < 0) continue;
-
-            var card = findCard(h);
-            if (isExcluded(card) || hasSponsorLabel(card)) continue;
-
-            var a = findLink(h, card);
-            if (!a) continue;
-
-            var href = resolveHref(a.href || '');
-            if (!href || href.indexOf('http') !== 0) continue;
-            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) continue;
-
-            var domain = domainOf(href);
-            if (!domain) continue;
-            if ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) continue;
-
-            candidates.push({ y: y, t: title, d: domain, u: canonicalHref(href) });
+            var lines = (card.innerText || card.textContent || '').split('\n')
+                .map(function(l) { return cleanTitle(l); })
+                .filter(function(l) {
+                    if (!l || l.length < 3 || l.length > 200) return false;
+                    var n = norm(l);
+                    if (n.indexOf('http') === 0) return false;
+                    if (domain && n === norm(domain)) return false;
+                    if (n === 'google play') return false;
+                    if (n.indexOf('nha tai tro') >= 0) return false;
+                    if (n.indexOf('ket qua duoc tai tro') >= 0) return false;
+                    if (n === 'sponsored' || n === 'quang cao') return false;
+                    return true;
+                });
+            return lines.length >= 3 ? lines.slice(2).join(' ') : (lines[1] || lines[0] || '');
         }
 
-        var links = root.querySelectorAll('a[href]');
-        for (var k = 0; k < links.length; k++) {
-            var link = links[k];
-            if (isExcluded(link)) continue;
+        function addResult(link, requireH3) {
+            if (requireH3 && !link.querySelector('h3')) return;
+            if (isAdBlock(link)) return;
 
-            var linkHref = resolveHref(link.href || '');
-            if (!linkHref || linkHref.indexOf('http') !== 0) continue;
-            if (linkHref.indexOf('/aclk?') >= 0 || linkHref.indexOf('googleadservices') >= 0) continue;
+            var realUrl = resolveUrl(link);
+            if (!allowedUrl(realUrl)) return;
+            if (seen[realUrl]) return;
 
-            var linkDomain = domainOf(linkHref);
-            if (!linkDomain) continue;
-            if ((linkDomain.indexOf('google.') >= 0 && linkDomain.indexOf('play.google.') < 0) || linkDomain.indexOf('gstatic.') >= 0 || linkDomain.indexOf('googleusercontent.') >= 0) continue;
+            try {
+                var u = new URL(realUrl);
+                var title = requireH3
+                    ? cleanTitle(link.querySelector('h3').innerText || link.querySelector('h3').textContent || '')
+                    : (isPlayGoogleLink(link) ? titleFromPlayGoogleLink(link, u.hostname) : titleFromMobileLink(link, u.hostname));
+                if (!title || title.length < 3 || title.length > 200) return;
 
-            var linkCard = findCard(link);
-            if (isExcluded(linkCard) || hasSponsorLabel(linkCard)) continue;
-
-            var linkY = visibleY(link);
-            if (linkY === null || linkY < 0) continue;
-
-            var linkTitle = titleFromLink(link, linkDomain) || linkDomain;
-            if (!linkTitle || linkTitle.length < 3 || linkTitle.length > 200) continue;
-
-            candidates.push({ y: linkY, t: linkTitle, d: linkDomain, u: canonicalHref(linkHref) });
+                seen[realUrl] = true;
+                results.push({ t: title, d: u.hostname, u: realUrl, ad: false });
+            } catch(e) {}
         }
 
-        candidates.sort(function(a, b) { return a.y - b.y; });
+        // Primary: same idea as backend CheckRankListResult.
+        var redirectLinks = document.querySelectorAll('a[href^="/url?q="], a[href*="/url?q="], a[href*="google.com/url?"]');
+        for (var i = 0; i < redirectLinks.length && results.length < 20; i++) {
+            addResult(redirectLinks[i], true);
+        }
+        var primaryCount = results.length;
 
-        for (var j = 0; j < candidates.length && out.length < 20; j++) {
-            var c = candidates[j];
-            var titleKey = norm(c.t) + '|' + c.d;
-            if (seenTitleDomain[titleKey] || seenUrl[c.u]) continue;
-            seenTitleDomain[titleKey] = true;
-            seenUrl[c.u] = true;
-            out.push({ t: c.t, d: c.d, u: c.u, ad: false });
+        // Special case: Google Play organic results often use direct href instead of /url?q=.
+        if (primaryCount > 0) {
+            var directLinks = document.querySelectorAll('a[href^="https://play.google."], a[href^="http://play.google."]');
+            for (var d = 0; d < directLinks.length && results.length < 20; d++) {
+                if (!isPlayGoogleLink(directLinks[d])) continue;
+                addResult(directLinks[d], false);
+            }
         }
 
-        return JSON.stringify(out);
+        // Mobile fallback: Google WebView often renders direct result cards as a.UBFage and h3=0.
+        if (primaryCount === 0) {
+            var mobileLinks = document.querySelectorAll('a.UBFage[href], a[href].UBFage, a[href^="https://play.google."], a[href^="http://play.google."]');
+            for (var j = 0; j < mobileLinks.length && results.length < 20; j++) {
+                addResult(mobileLinks[j], false);
+            }
+        }
+
+        return JSON.stringify(results);
     } catch(e) {
         return JSON.stringify([{ t: 'ERROR:' + e.message, d: '', u: '', ad: false }]);
     }
@@ -620,12 +662,18 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
         var maxY = $maxCssY;
 
         var EXCLUDE = [
-            '#tads', '#tadsb', '.pla-unit',
+            '#tads', '#tadsb',
+            '[data-text-ad]', '.uEierd', '.pla-unit',
+            '[data-rw]',
             '.related-question-pair',
             '.kp-wholepage', '.osrp-blk', '.I6TXqe',
             '[aria-label="Ads"]',
             '[aria-label="Quảng cáo"]',
-            '[aria-label="Mọi người cũng hỏi"]'
+            '[aria-label="Mọi người cũng hỏi"]',
+            '[aria-label="Kết quả được tài trợ"]',
+            '.mnr-c',
+            '.commercial-unit-desktop-top',
+            '.cu-container'
         ];
 
         function isExcluded(el) {
@@ -639,19 +687,42 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
         function norm(text) {
             text = (text || '').toLowerCase();
             try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
-            return text;
+            return text.replace(/[^a-z0-9]+/g, ' ').trim();
         }
 
-        function hasSponsorLabel(el) {
+        var AD_KW = ['ket qua duoc tai tro', 'nha tai tro', 'duoc tai tro',
+                     'quang cao', 'sponsored'];
+        function matchAd(t) {
+            for (var i = 0; i < AD_KW.length; i++) if (t.indexOf(AD_KW[i]) >= 0) return true;
+            return false;
+        }
+        function hasAdLabel(el) {
             if (!el) return false;
-            var text = norm(el.innerText || el.textContent || '');
-            return text.indexOf('nha tai tro') >= 0;
+            var t = norm(el.innerText || el.textContent || '');
+            if (t.length > 0 && t.length < 80 && matchAd(t)) return true;
+            if (!el.children || el.children.length === 0) return false;
+            var ft = norm(el.children[0].innerText || el.children[0].textContent || '');
+            if (ft.length > 0 && ft.length < 80 && matchAd(ft)) return true;
+            if (el.children.length > 1) {
+                var lt = norm(el.children[el.children.length-1].innerText || el.children[el.children.length-1].textContent || '');
+                if (lt.length > 0 && lt.length < 80 && matchAd(lt)) return true;
+            }
+            return false;
         }
-
-        function isAdCandidate(aTag, card) {
-            var href = aTag.href || '';
-            if (href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0) return true;
-            return hasSponsorLabel(card || aTag);
+        function isAd(el) {
+            if (!el) return false;
+            if (isExcluded(el)) return true;
+            var cur = el;
+            for (var i = 0; i < 15 && cur && cur !== document.body; i++) {
+                if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                if (isExcluded(cur)) return true;
+                if (hasAdLabel(cur)) return true;
+                cur = cur.parentElement;
+            }
+            return false;
+        }
+        function isAdUrl(h) {
+            return h.indexOf('/aclk?') >= 0 || h.indexOf('googleadservices') >= 0;
         }
 
         function getDomain(href) {
@@ -696,7 +767,7 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
                 .map(function(l) { return cleanTitle(l); })
                 .filter(function(l) {
                     var n = norm(l);
-                    return l.length >= 3 && n.indexOf('nha tai tro') < 0 && n.indexOf('http') !== 0;
+                    return l.length >= 3 && !matchAd(n) && n.indexOf('http') !== 0;
                 });
             lines.sort(function(a, b) { return b.length - a.length; });
             return lines[0] || '';
@@ -729,12 +800,12 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
             var aTag = candidate.a;
             var card = candidate.card;
             if (!aTag || !card) return false;
-            if (isExcluded(aTag) || isExcluded(card)) return false;
-            if (isAdCandidate(aTag, card)) return false;
+            if (isAd(aTag) || isAd(card)) return false;
             if (seenCards.indexOf(card) >= 0) return false;
 
             var href = resolveHref(aTag.href || '');
             if (!href || href.indexOf('http') !== 0) return false;
+            if (isAdUrl(href)) return false;
             if (seenHref[href]) return false;
 
             var domain = getDomain(href);
@@ -755,11 +826,12 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
         var links = searchRoot.querySelectorAll('a[href]');
         for (var i = 0; i < links.length; i++) {
             var a = links[i];
-            if (isExcluded(a)) continue;
+            if (isAd(a)) continue;
             var href = resolveHref(a.href || '');
             if (!href || href.indexOf('http') !== 0) continue;
             var domain = getDomain(href);
-            if (!domain || ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0)) continue;
+            if (!domain) continue;
+            if (domain === 'gstatic.com' || domain === 'googleusercontent.com') continue;
             var card = findCard(a);
             var titleEl = titleElementForLink(a, card);
             var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');

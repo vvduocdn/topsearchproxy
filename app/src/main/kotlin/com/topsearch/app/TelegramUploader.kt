@@ -14,18 +14,27 @@ private const val BOT_BASE  = "https://api.telegram.org/bot$BOT_TOKEN"
 
 object TelegramUploader {
 
-    /** Upload all local JPEGs, return list of public URLs (skips failures). */
-    fun uploadAll(paths: List<String>): List<String> =
-        paths.mapNotNull { p -> upload(p).takeIf { it.isNotBlank() } }
+    /**
+     * Upload all local JPEGs, return list of public URLs (skips failures).
+     * Sends with optional caption for the first image.
+     */
+    fun uploadAll(paths: List<String>, caption: String = ""): List<String> =
+        paths.mapIndexedNotNull { i, p ->
+            upload(p, if (i == 0) caption else "").takeIf { it.isNotBlank() }
+        }
 
-    /** Upload local JPEG to Telegram channel, return public HTTP URL. Blank on failure. */
-    fun upload(filePath: String): String {
+    /**
+     * Upload local JPEG to Telegram channel, return public HTTP URL.
+     * If caption is non-blank, sends it with the first image via sendDocument caption.
+     * Blank on failure.
+     */
+    fun upload(filePath: String, caption: String = ""): String {
         if (filePath.isBlank()) return ""
         val file = File(filePath)
         if (!file.exists()) { Log.e(TAG, "File not found: $filePath"); return "" }
         Log.d(TAG, "upload: ${file.name}  size=${file.length()}B")
         return try {
-            val fileId = sendDocument(file) ?: return ""
+            val fileId = sendDocument(file, caption) ?: return ""
             Log.d(TAG, "  file_id = $fileId")
             val tgPath = getFilePath(fileId) ?: return ""
             Log.d(TAG, "  tg_path = $tgPath")
@@ -39,7 +48,8 @@ object TelegramUploader {
     }
 
     // sendDocument thay vì sendPhoto — không có giới hạn dimensions, hỗ trợ ảnh full page cao
-    private fun sendDocument(file: File): String? {
+    // caption: gửi kèm text hiển thị dưới ảnh trên Telegram
+    private fun sendDocument(file: File, caption: String = ""): String? {
         val boundary = "TgBound${System.currentTimeMillis()}"
         val conn = (URL("$BOT_BASE/sendDocument").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -51,6 +61,9 @@ object TelegramUploader {
 
         conn.outputStream.use { out ->
             out.write("--$boundary\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n$CHAT_ID\r\n".toByteArray())
+            if (caption.isNotBlank()) {
+                out.write("--$boundary\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n${caption}\r\n".toByteArray())
+            }
             out.write("--$boundary\r\nContent-Disposition: form-data; name=\"document\"; filename=\"${file.name}\"\r\nContent-Type: image/jpeg\r\n\r\n".toByteArray())
             file.inputStream().use { it.copyTo(out) }
             out.write("\r\n--$boundary--\r\n".toByteArray())

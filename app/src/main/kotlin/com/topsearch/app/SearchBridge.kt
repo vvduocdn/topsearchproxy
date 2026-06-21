@@ -42,14 +42,15 @@ object SearchBridge {
         results:       List<SearchResult>,
         screenshotPaths: List<String> = emptyList(),
         publicIp:      String         = "",
+        totalCount:    Int            = results.size,
     ) {
-        callbacks.remove(requestId)?.invoke(results, screenshotPaths, publicIp)
+        callbacks.remove(requestId)?.invoke(results, screenshotPaths, publicIp, totalCount)
     }
 
     /** Called by Service before emitting [incoming] */
-    fun registerCallback(requestId: String, cb: (List<SearchResult>, List<String>, String) -> Unit) {
+    fun registerCallback(requestId: String, cb: (List<SearchResult>, List<String>, String, Int) -> Unit) {
         callbacks[requestId] = cb
     }
 
-    private val callbacks = ConcurrentHashMap<String, (List<SearchResult>, List<String>, String) -> Unit>()
+    private val callbacks = ConcurrentHashMap<String, (List<SearchResult>, List<String>, String, Int) -> Unit>()
 }

@@ -161,7 +161,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             Log.d("TopSearch", "Cache HIT '$kw' country=${req.country} → ${cachedResults.size} results")
             socketRequestId = null
             updateBatchStatus(req.requestId, CheckStatus.DONE)
-            SearchBridge.dispatchResult(req.requestId, cachedResults, emptyList(), proxyIp)
+            SearchBridge.dispatchResult(req.requestId, cachedResults, emptyList(), proxyIp, cachedResults.size)
             val suffix = if (pendingQueueCount > 0) " (còn $pendingQueueCount đang chờ)" else ""
             _socketInfo.value = "[Cache] \"$kw\" → ${cachedResults.size} kết quả$suffix"
             _state.value = SearchState.Idle
@@ -279,7 +279,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             reqId?.let { _keywordResults.value = _keywordResults.value + (it to jsResults) }
             if (reqId != null) {
                 updateBatchStatus(reqId, CheckStatus.DONE)
-                SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp)
+                SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp, jsResults.size)
                 showSocketDone(jsResults, keyword, firstPath, city, proxyIp, proxyFull, country)
             } else {
                 _state.value = SearchState.Done(keyword, jsResults, firstPath, city, proxyIp)
@@ -309,7 +309,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 if (reqId != null) {
                     if (results.isNotEmpty()) {
                         updateBatchStatus(reqId, CheckStatus.DONE)
-                        SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp)
+                        SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp, results.size)
                     } else {
                         updateBatchStatus(reqId, CheckStatus.ERROR, "OCR không đọc được top")
                     }
