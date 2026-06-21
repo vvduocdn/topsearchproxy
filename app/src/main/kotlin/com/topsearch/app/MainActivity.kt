@@ -122,8 +122,6 @@ class MainActivity : ComponentActivity() {
                             isConnected       = isConnected,
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
-                            lastKeyword       = s.keyword,
-                            lastResultInfo    = s.socketInfo,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )

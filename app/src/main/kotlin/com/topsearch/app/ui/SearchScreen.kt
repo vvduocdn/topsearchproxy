@@ -83,8 +83,6 @@ fun SearchScreen(
     skipProxy:         Boolean              = false,
     socketInfo:        String               = "",
     isConnected:       Boolean              = false,
-    lastKeyword:       String               = "",
-    lastResultInfo:    String               = "",
     keywordBatch:      List<KeywordBatchItem>            = emptyList(),
     keywordResults:    Map<String, List<SearchResult>>   = emptyMap(),
     onSkipProxyChange: (Boolean) -> Unit                 = {},
@@ -130,8 +128,6 @@ fun SearchScreen(
                     loadingStep    = loadingStep,
                     isConnected    = isConnected,
                     socketInfo     = socketInfo,
-                    lastKeyword    = lastKeyword,
-                    lastResultInfo = lastResultInfo,
                     keywordBatch   = keywordBatch,
                     keywordResults = keywordResults,
                     onManualClick  = { showManual = true },
@@ -149,8 +145,6 @@ private fun StandbyContent(
     loadingStep:    String,
     isConnected:    Boolean,
     socketInfo:     String,
-    lastKeyword:    String,
-    lastResultInfo: String,
     keywordBatch:   List<KeywordBatchItem>          = emptyList(),
     keywordResults: Map<String, List<SearchResult>> = emptyMap(),
     onManualClick:  () -> Unit,
@@ -280,33 +274,8 @@ private fun StandbyContent(
 
         Spacer(Modifier.weight(0.45f))
 
-        // ── Last result info card ──────────────────────────────────────────
         AnimatedVisibility(
-            visible = lastKeyword.isNotEmpty(),
-            enter   = fadeIn() + expandVertically(),
-            exit    = fadeOut() + shrinkVertically(),
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                ),
-                shape = RoundedCornerShape(14.dp),
-            ) {
-                Text(
-                    text       = lastResultInfo,
-                    color      = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier   = Modifier.padding(14.dp),
-                    style      = MaterialTheme.typography.bodySmall,
-                    lineHeight = 19.sp,
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = lastKeyword.isEmpty() && socketInfo.isNotEmpty(),
+            visible = socketInfo.isNotEmpty(),
             enter   = fadeIn() + expandVertically(),
             exit    = fadeOut() + shrinkVertically(),
         ) {
