@@ -379,7 +379,7 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
 
             var domain = getDomain(href);
             if (!domain) return false;
-            if ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
+            if (domain === 'gstatic.com' || domain === 'googleusercontent.com') return false;
 
             var title = candidate.title || titleFromCard(card, aTag);
             if (!title || title.length < 3 || title.length > 200) return false;
@@ -739,7 +739,7 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
 
             var domain = getDomain(href);
             if (!domain) return false;
-            if ((domain.indexOf('google.') >= 0 && domain.indexOf('play.google.') < 0) || domain.indexOf('gstatic.') >= 0 || domain.indexOf('googleusercontent.') >= 0) return false;
+            if (domain === 'gstatic.com' || domain === 'googleusercontent.com') return false;
 
             var title = candidate.title || titleFromCard(card, aTag);
             if (!title || title.length < 3 || title.length > 200) return false;
