@@ -448,11 +448,7 @@ fun WebCaptureScreen(
 
         capturing = true
 
-        // Scroll về đầu để chụp từ top
-        wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
-        delay(300)
-
-        // ── Bước 4: Chạy JS lấy kết quả ─────────────────────────────────
+        // ── Bước 4: Chạy JS lấy kết quả (trước khi scroll về top để giữ DOM đầy đủ) ──
         val jsonStr = suspendCancellableCoroutine { cont ->
             wv.evaluateJavascript(EXTRACT_JS) { r -> cont.resume(r ?: "[]") }
         }
@@ -467,6 +463,10 @@ fun WebCaptureScreen(
             }
         }
         Log.d(TAG, "DETECTED CITY → $rawCity")
+
+        // Scroll về đầu để chụp từ top
+        wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+        delay(300)
 
         // ── Bước 5: Chụp ảnh ─────────────────────────────────────────────
         try {
