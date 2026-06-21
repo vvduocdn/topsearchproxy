@@ -53,6 +53,14 @@ import kotlin.coroutines.resume
 
 private const val TAG = "WebCapture"
 private const val COUNTDOWN_SEC = 6
+private const val MAX_CAPTURE_TILES = 48
+private const val MAX_CAPTURE_CHUNK_HEIGHT_PX = 12_000
+private const val CAPTURE_SETTLE_MS = 650L
+private const val PIXEL_COPY_RETRIES = 3
+private const val SCREENSHOT_JPEG_QUALITY = 90
+private const val MAX_CAPTURE_OVERLAP_CSS_PX = 600
+private const val MIN_SEAM_PROGRESS_RATIO = 0.45f
+private const val MAX_SEAM_PROGRESS_RATIO = 0.92f
 private const val CHROME_UA =
     "Mozilla/5.0 (Linux; Android 14; SM-S908B) " +
     "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -771,6 +779,300 @@ private fun parseJsResults(raw: String): List<SearchResult> {
  * Dùng window.innerHeight (CSS px) làm bước scroll — KHÔNG dùng webView.height (physical px).
  */
 private suspend fun captureWebViewTiles(webView: WebView, dir: File?): List<String> {
+    val w       = webView.width.takeIf { it > 0 } ?: 1080
+    val viewHPx = webView.height.takeIf { it > 0 } ?: 1920
+    val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+    val base    = dir ?: File("/sdcard")
+
+    // PixelCopy cần vùng WebView thật trên màn hình (real on-screen rect).
+    val window = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        (webView.context as? Activity)?.window
+    } else null
+    val loc     = IntArray(2).also { webView.getLocationOnScreen(it) }
+    val srcRect = Rect(loc[0], loc[1], loc[0] + w, loc[1] + viewHPx)
+
+    webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+    delay(CAPTURE_SETTLE_MS)
+
+    val (cssViewH, initialCssPageH) = readPageMetrics(webView, viewHPx)
+    // JS trả về CSS pixel; bitmap dùng pixel vật lý (physical pixel).
+    val dpr = if (cssViewH > 0) viewHPx.toFloat() / cssViewH else 1f
+    var totalPhysH = kotlin.math.ceil(initialCssPageH * dpr).toInt().coerceAtLeast(1)
+    Log.d(TAG, "captureFullPage: viewHPx=$viewHPx cssViewH=$cssViewH cssPageH=$initialCssPageH dpr=$dpr totalPhysH=$totalPhysH")
+
+    val paths = mutableListOf<String>()
+    val tileBmp = Bitmap.createBitmap(w, viewHPx, Bitmap.Config.ARGB_8888)
+
+    var chunkTop = 0
+    var chunkBitmap = createChunkBitmap(w, totalPhysH, chunkTop)
+    var chunkCanvas = Canvas(chunkBitmap)
+    var chunkHasPixels = false
+    var chunkIndex = 1
+
+    // Lưu chunk hiện tại: trang thường 1 file, trang quá cao thì nhiều part.
+    fun saveChunkIfNeeded(force: Boolean = false) {
+        if (!chunkHasPixels && !force) return
+        val suffix = if (chunkIndex == 1 && totalPhysH <= MAX_CAPTURE_CHUNK_HEIGHT_PX) {
+            "full"
+        } else {
+            "part_%02d".format(chunkIndex)
+        }
+        val file = File(base, "topsearch_${ts}_$suffix.jpg")
+        FileOutputStream(file).use {
+            chunkBitmap.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_JPEG_QUALITY, it)
+        }
+        paths += file.absolutePath
+        Log.d(TAG, "Saved screenshot chunk ${file.name} top=$chunkTop height=${chunkBitmap.height}")
+        chunkHasPixels = false
+        chunkIndex++
+    }
+
+    // Sang bitmap output tiếp theo khi tọa độ page Y vượt chunk hiện tại.
+    fun advanceChunkTo(targetY: Int) {
+        while (targetY >= chunkTop + chunkBitmap.height && chunkTop + chunkBitmap.height < totalPhysH) {
+            val nextChunkTop = chunkTop + chunkBitmap.height
+            saveChunkIfNeeded()
+            chunkBitmap.recycle()
+            chunkTop = nextChunkTop
+            chunkBitmap = createChunkBitmap(w, totalPhysH, chunkTop)
+            chunkCanvas = Canvas(chunkBitmap)
+        }
+    }
+
+    var offsetCss   = 0
+    var prevActualY = -1
+    var idx         = 0
+    var capturedBottom = 0
+    // Chụp có overlap, rồi crop phần dính bằng capturedBottom.
+    val overlapCss = minOf(MAX_CAPTURE_OVERLAP_CSS_PX, (cssViewH * 0.25f).toInt()).coerceAtLeast(1)
+    val scrollStepCss = (cssViewH - overlapCss).coerceAtLeast(1)
+
+    while (idx < MAX_CAPTURE_TILES) {
+        webView.evaluateJavascript("window.scrollTo({top:$offsetCss,behavior:'instant'});", null)
+        delay(CAPTURE_SETTLE_MS)
+
+        // Tin vị trí scroll thật của browser (actualY), không tin offset đã yêu cầu.
+        val actualY = readActualScrollY(webView, offsetCss)
+        if (actualY == prevActualY) break
+
+        val latestCssPageH = readPageMetrics(webView, viewHPx).second
+        totalPhysH = maxOf(totalPhysH, kotlin.math.ceil(latestCssPageH * dpr).toInt())
+        // Ưu tiên cắt giữa các result block, tránh cắt ngang title/snippet.
+        val minCutCss = actualY + (cssViewH * MIN_SEAM_PROGRESS_RATIO).toInt()
+        val maxCutCss = actualY + (cssViewH * MAX_SEAM_PROGRESS_RATIO).toInt()
+        val fallbackCutCss = (actualY + scrollStepCss).coerceAtMost(latestCssPageH)
+        val domCutCss = findSafeCutCssY(webView, actualY, cssViewH)
+        val cutCss = when {
+            actualY + cssViewH >= latestCssPageH - 2 -> latestCssPageH
+            domCutCss in minCutCss..maxCutCss -> domCutCss
+            else -> fallbackCutCss
+        }.coerceAtLeast(actualY + 1)
+
+        // Từ tile 2, ẩn sticky/fixed bar của Google để không lặp trong ảnh ghép.
+        setCaptureOverlaysHidden(webView, hide = idx > 0)
+        delay(80)
+
+        if (!copyWebViewToBitmap(webView, window, srcRect, tileBmp, idx)) {
+            setCaptureOverlaysHidden(webView, hide = false)
+            tileBmp.recycle()
+            chunkBitmap.recycle()
+            webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+            return emptyList()
+        }
+
+        val tileTop = (actualY * dpr).toInt().coerceAtLeast(0)
+        val tileBottom = minOf(tileTop + viewHPx, kotlin.math.ceil(cutCss * dpr).toInt(), totalPhysH)
+        if (tileTop > capturedBottom + 2) {
+            Log.w(TAG, "Capture gap detected: tileTop=$tileTop capturedBottom=$capturedBottom idx=$idx")
+        }
+        // Không vẽ ngược lên vùng đã ghép xong, tránh đè/trùng nội dung.
+        var segmentTop = maxOf(tileTop, capturedBottom)
+
+        while (segmentTop < tileBottom) {
+            advanceChunkTo(segmentTop)
+            val chunkBottom = (chunkTop + chunkBitmap.height).coerceAtMost(totalPhysH)
+            val segmentBottom = minOf(tileBottom, chunkBottom)
+            // Crop tọa độ tile vào đúng chunk output hiện tại.
+            val srcTop = segmentTop - tileTop
+            val srcBottom = segmentBottom - tileTop
+            val dstTop = segmentTop - chunkTop
+            val dstBottom = segmentBottom - chunkTop
+
+            if (srcBottom > srcTop && dstBottom > dstTop) {
+                chunkCanvas.drawBitmap(
+                    tileBmp,
+                    Rect(0, srcTop, w, srcBottom),
+                    Rect(0, dstTop, w, dstBottom),
+                    null,
+                )
+                chunkHasPixels = true
+                capturedBottom = maxOf(capturedBottom, segmentBottom)
+            }
+            segmentTop = segmentBottom
+        }
+
+        prevActualY = actualY
+        offsetCss = (cutCss - overlapCss).coerceAtLeast(0)
+        Log.d(TAG, "capture seam idx=$idx actualY=$actualY cutCss=$cutCss domCutCss=$domCutCss nextOffset=$offsetCss")
+        idx++
+    }
+
+    tileBmp.recycle()
+    saveChunkIfNeeded(force = paths.isEmpty())
+    chunkBitmap.recycle()
+    setCaptureOverlaysHidden(webView, hide = false)
+    webView.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+
+    Log.d(TAG, "Full page saved as ${paths.size} file(s), tiles=$idx dpr=$dpr totalPhysH=$totalPhysH capturedBottom=$capturedBottom overlapCss=$overlapCss")
+    return paths
+}
+
+private fun createChunkBitmap(width: Int, totalHeight: Int, chunkTop: Int): Bitmap {
+    val height = (totalHeight - chunkTop)
+        .coerceAtMost(MAX_CAPTURE_CHUNK_HEIGHT_PX)
+        .coerceAtLeast(1)
+    return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
+        Canvas(it).drawColor(android.graphics.Color.WHITE)
+    }
+}
+
+private suspend fun readPageMetrics(webView: WebView, fallbackViewHeightPx: Int): Pair<Int, Int> =
+    suspendCancellableCoroutine { cont ->
+        webView.evaluateJavascript("[window.innerHeight,document.documentElement.scrollHeight]") { r ->
+            try {
+                val arr = JSONArray(r?.trim() ?: "[]")
+                cont.resume(Pair(arr.optInt(0, fallbackViewHeightPx / 3), arr.optInt(1, fallbackViewHeightPx / 3)))
+            } catch (_: Exception) {
+                cont.resume(Pair(fallbackViewHeightPx / 3, fallbackViewHeightPx / 3))
+            }
+        }
+    }
+
+private suspend fun readActualScrollY(webView: WebView, fallback: Int): Int =
+    suspendCancellableCoroutine { cont ->
+        webView.evaluateJavascript("window.pageYOffset") { r ->
+            cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: fallback)
+        }
+    }
+
+private suspend fun findSafeCutCssY(webView: WebView, actualY: Int, cssViewH: Int): Int {
+    val minCut = actualY + (cssViewH * MIN_SEAM_PROGRESS_RATIO).toInt()
+    val maxCut = actualY + (cssViewH * MAX_SEAM_PROGRESS_RATIO).toInt()
+    // Trả về ranh giới result cuối cùng trong vùng cắt an toàn (safe cut zone).
+    val js = """
+        (function(minCut, maxCut) {
+            var cuts = [];
+            function add(y) {
+                y = Math.round(y);
+                if (y >= minCut && y <= maxCut) cuts.push(y);
+            }
+            function visibleBlock(el) {
+                var r = el.getBoundingClientRect();
+                if (r.width < 120 || r.height < 24) return null;
+                if (r.bottom <= 0 || r.top >= window.innerHeight) return null;
+                return r;
+            }
+            var selectors = [
+                '#rso > div',
+                '#rso .MjjYud',
+                '#rso div.g',
+                '#search .MjjYud',
+                '#search div[data-sokoban-container] > div'
+            ];
+            selectors.forEach(function(sel) {
+                Array.prototype.forEach.call(document.querySelectorAll(sel), function(el) {
+                    try {
+                        var r = visibleBlock(el);
+                        if (!r) return;
+                        add(window.pageYOffset + r.top);
+                        add(window.pageYOffset + r.bottom);
+                    } catch(e) {}
+                });
+            });
+            cuts = cuts.filter(function(v, i, a) { return a.indexOf(v) === i; })
+                       .sort(function(a, b) { return a - b; });
+            return cuts.length ? cuts[cuts.length - 1] : 0;
+        })($minCut, $maxCut)
+    """.trimIndent()
+    return suspendCancellableCoroutine { cont ->
+        webView.evaluateJavascript(js) { r ->
+            cont.resume(r?.trim()?.toFloatOrNull()?.toInt() ?: 0)
+        }
+    }
+}
+
+private suspend fun setCaptureOverlaysHidden(webView: WebView, hide: Boolean) {
+    // Chỉ ẩn overlay fixed/sticky; result block bình thường vẫn giữ nguyên.
+    val js = if (hide) {
+        """
+        (function() {
+            var count = 0;
+            var maxTop = Math.min(260, window.innerHeight * 0.35);
+            Array.prototype.forEach.call(document.querySelectorAll('body *'), function(el) {
+                try {
+                    var st = window.getComputedStyle(el);
+                    if (st.position !== 'fixed' && st.position !== 'sticky') return;
+                    var r = el.getBoundingClientRect();
+                    if (r.width < 40 || r.height < 8 || r.height > window.innerHeight * 0.45) return;
+                    if (r.top > maxTop && r.bottom < window.innerHeight - 80) return;
+                    if (!el.hasAttribute('data-topsearch-old-visibility')) {
+                        el.setAttribute('data-topsearch-old-visibility', el.style.visibility || '');
+                    }
+                    el.style.visibility = 'hidden';
+                    count++;
+                } catch(e) {}
+            });
+            return count;
+        })()
+        """.trimIndent()
+    } else {
+        """
+        (function() {
+            var count = 0;
+            Array.prototype.forEach.call(document.querySelectorAll('[data-topsearch-old-visibility]'), function(el) {
+                var old = el.getAttribute('data-topsearch-old-visibility') || '';
+                el.style.visibility = old;
+                el.removeAttribute('data-topsearch-old-visibility');
+                count++;
+            });
+            return count;
+        })()
+        """.trimIndent()
+    }
+    suspendCancellableCoroutine<Unit> { cont ->
+        webView.evaluateJavascript(js) { r ->
+            Log.d(TAG, "capture overlay hide=$hide affected=$r")
+            cont.resume(Unit)
+        }
+    }
+}
+
+private suspend fun copyWebViewToBitmap(
+    webView: WebView,
+    window: android.view.Window?,
+    srcRect: Rect,
+    target: Bitmap,
+    tileIndex: Int,
+): Boolean {
+    if (window == null) {
+        target.eraseColor(android.graphics.Color.WHITE)
+        webView.draw(Canvas(target))
+        return true
+    }
+
+    // PixelCopy có thể fail khi Chromium đang repaint; retry ngắn trước khi bỏ.
+    repeat(PIXEL_COPY_RETRIES) { attempt ->
+        val result = suspendCancellableCoroutine<Int> { cont ->
+            PixelCopy.request(window, srcRect, target, { cont.resume(it) }, Handler(Looper.getMainLooper()))
+        }
+        if (result == PixelCopy.SUCCESS) return true
+        Log.w(TAG, "PixelCopy failed result=$result tile=$tileIndex attempt=${attempt + 1}/$PIXEL_COPY_RETRIES")
+        delay(120L * (attempt + 1))
+    }
+    return false
+}
+
+private suspend fun captureWebViewTilesOld(webView: WebView, dir: File?): List<String> {
     val w       = webView.width.takeIf { it > 0 } ?: 1080
     val viewHPx = webView.height.takeIf { it > 0 } ?: 1920
     val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
