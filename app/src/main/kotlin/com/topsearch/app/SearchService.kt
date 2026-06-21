@@ -69,6 +69,7 @@ class SearchService : Service() {
             val client = SignalRClient(
                 url            = WS_URL,
                 onKeyword      = ::onKeyword,
+                onBatch        = ::onBatch,
                 onDisconnected = { gone.complete(Unit) },
             )
             activeClient = client
@@ -81,6 +82,12 @@ class SearchService : Service() {
             Log.w(TAG, "Disconnected — retry in 5s")
             delay(5_000)
         }
+    }
+
+    // ── Batch handler ──────────────────────────────────────────────────────────
+
+    private fun onBatch(requests: List<SearchBridge.SocketRequest>) {
+        scope.launch { SearchBridge.incomingBatch.emit(requests) }
     }
 
     // ── Keyword handler ────────────────────────────────────────────────────────

@@ -1,5 +1,13 @@
 package com.topsearch.app
 
+enum class CheckStatus { PENDING, IN_PROGRESS, DONE, ERROR }
+
+data class KeywordBatchItem(
+    val requestId: String,
+    val keyword:   String,
+    val status:    CheckStatus = CheckStatus.PENDING,
+)
+
 data class SearchResult(
     val rank:   Int,
     val title:  String,

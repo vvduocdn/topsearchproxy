@@ -14,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -46,6 +47,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     /** Trạng thái kết nối WebSocket từ Service */
     val isConnected: StateFlow<Boolean> = SearchBridge.isConnected
 
+    /** Danh sách keyword trong batch hiện tại kèm trạng thái xử lý */
+    private val _keywordBatch = MutableStateFlow<List<KeywordBatchItem>>(emptyList())
+    val keywordBatch: StateFlow<List<KeywordBatchItem>> = _keywordBatch.asStateFlow()
+
     fun setSkipProxy(skip: Boolean) { _skipProxy.value = skip }
 
     // requestId của CheckKeyword đang xử lý (null nếu search thủ công từ UI)
@@ -59,6 +64,12 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private var pendingQueueCount = 0
 
     init {
+        // Populate batch status list when server sends a new batch
+        viewModelScope.launch {
+            SearchBridge.incomingBatch.collect { requests ->
+                _keywordBatch.value = requests.map { KeywordBatchItem(it.requestId, it.keyword) }
+            }
+        }
         // Forward incoming socket requests to the sequential queue
         viewModelScope.launch {
             SearchBridge.incoming.collect { req ->
@@ -80,6 +91,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val kw = req.keyword.trim().ifBlank { return }
         socketDoneJob?.cancel()
         socketRequestId = req.requestId
+        updateBatchStatus(req.requestId, CheckStatus.IN_PROGRESS)
 
         val effectiveProxy = if (_skipProxy.value) "" else req.proxy
         Log.d("TopSearch", "processSocketRequest: kw='$kw' proxy='${req.proxy}' skipProxy=${_skipProxy.value} effective='$effectiveProxy' country=${req.country}")
@@ -126,6 +138,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         withTimeoutOrNull(3 * 60 * 1_000L) { done.await() } ?: run {
             Log.w("TopSearch", "processSocketRequest TIMEOUT '$kw' — dispatching empty and moving on")
             currentDone = null
+            updateBatchStatus(req.requestId, CheckStatus.ERROR)
             SearchBridge.dispatchResult(req.requestId, emptyList(), publicIp = proxyIp)
             _state.value = SearchState.Idle
             val suffix = if (pendingQueueCount > 0) " — $pendingQueueCount keyword đang chờ" else ""
@@ -136,6 +149,12 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private fun signalDone() {
         currentDone?.complete(Unit)
         currentDone = null
+    }
+
+    private fun updateBatchStatus(requestId: String, status: CheckStatus) {
+        _keywordBatch.update { list ->
+            list.map { if (it.requestId == requestId) it.copy(status = status) else it }
+        }
     }
 
     fun startSearch(
@@ -182,6 +201,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         if (jsResults.isNotEmpty()) {
             Log.d("TopSearch", buildResultJson(keyword, city, jsResults))
             if (reqId != null) {
+                updateBatchStatus(reqId, CheckStatus.DONE)
                 SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp)
                 showSocketDone(jsResults, keyword, firstPath, city, proxyIp, proxyFull, country)
             } else {
@@ -194,6 +214,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         if (screenshotPaths.isEmpty()) {
             _state.value = SearchState.Error("Không lấy được kết quả", keyword)
             if (reqId != null) {
+                updateBatchStatus(reqId, CheckStatus.DONE)
                 SearchBridge.dispatchResult(reqId, emptyList(), publicIp = proxyIp)
                 showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
             }
@@ -206,6 +227,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 val results = OcrHelper.extractSearchResults(firstPath)
                 Log.d("TopSearch", buildResultJson(keyword, city, results))
                 if (reqId != null) {
+                    updateBatchStatus(reqId, CheckStatus.DONE)
                     SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp)
                     showSocketDone(results, keyword, firstPath, city, proxyIp, proxyFull, country)
                 } else {
@@ -215,6 +237,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             } catch (e: Exception) {
                 _state.value = if (reqId != null) SearchState.Idle else SearchState.Error("OCR thất bại: ${e.message}", keyword)
                 reqId?.let {
+                    updateBatchStatus(it, CheckStatus.ERROR)
                     SearchBridge.dispatchResult(it, emptyList(), screenshotPaths, proxyIp)
                     showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
                 }
@@ -228,6 +251,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val reqId     = socketRequestId?.also { socketRequestId = null }
         val proxyIp   = capturing?.proxyIp ?: ""
         if (reqId != null) {
+            updateBatchStatus(reqId, CheckStatus.ERROR)
             SearchBridge.dispatchResult(reqId, emptyList(), publicIp = proxyIp)
             showSocketDone(emptyList(), keyword, "", "", proxyIp,
                 capturing?.proxyHost ?: "", capturing?.country ?: 1)

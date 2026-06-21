@@ -27,6 +27,9 @@ object SearchBridge {
     /** Service → ViewModel: new keyword to search */
     val incoming = MutableSharedFlow<SocketRequest>(extraBufferCapacity = 64)
 
+    /** Full batch notification — ViewModel collects to populate batch status UI */
+    val incomingBatch = MutableSharedFlow<List<SocketRequest>>(extraBufferCapacity = 8)
+
     /** ViewModel → Service: search results ready (screenshotPaths empty if capture failed) */
     fun dispatchResult(
         requestId:     String,

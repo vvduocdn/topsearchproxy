@@ -17,12 +17,16 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -38,6 +42,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.topsearch.app.CheckStatus
+import com.topsearch.app.KeywordBatchItem
 
 data class VietnamCity(
     val label:     String,
@@ -67,18 +73,19 @@ val VIETNAM_CITIES = listOf(
 
 @Composable
 fun SearchScreen(
-    loadingStep:       String  = "",
-    countdown:         Int     = 0,
-    errorMessage:      String  = "",
-    initialKeyword:    String  = "",
-    skipProxy:         Boolean = false,
-    socketInfo:        String  = "",
-    isConnected:       Boolean = false,
-    lastKeyword:       String  = "",
-    lastResultCount:   Int     = 0,
-    lastResultInfo:    String  = "",
-    onViewResults:     () -> Unit = {},
-    onSkipProxyChange: (Boolean) -> Unit = {},
+    loadingStep:       String               = "",
+    countdown:         Int                  = 0,
+    errorMessage:      String               = "",
+    initialKeyword:    String               = "",
+    skipProxy:         Boolean              = false,
+    socketInfo:        String               = "",
+    isConnected:       Boolean              = false,
+    lastKeyword:       String               = "",
+    lastResultCount:   Int                  = 0,
+    lastResultInfo:    String               = "",
+    keywordBatch:      List<KeywordBatchItem> = emptyList(),
+    onViewResults:     () -> Unit           = {},
+    onSkipProxyChange: (Boolean) -> Unit    = {},
     onSearch:          (keyword: String, city: VietnamCity) -> Unit,
 ) {
     val isLoading = loadingStep.isNotEmpty()
@@ -124,6 +131,7 @@ fun SearchScreen(
                     lastKeyword     = lastKeyword,
                     lastResultCount = lastResultCount,
                     lastResultInfo  = lastResultInfo,
+                    keywordBatch    = keywordBatch,
                     onViewResults   = onViewResults,
                     onManualClick   = { showManual = true },
                 )
@@ -143,6 +151,7 @@ private fun StandbyContent(
     lastKeyword:     String,
     lastResultCount: Int,
     lastResultInfo:  String,
+    keywordBatch:    List<KeywordBatchItem> = emptyList(),
     onViewResults:   () -> Unit,
     onManualClick:   () -> Unit,
 ) {
@@ -263,6 +272,11 @@ private fun StandbyContent(
             color     = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f),
             textAlign = TextAlign.Center,
         )
+
+        if (keywordBatch.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            KeywordBatchPanel(keywordBatch)
+        }
 
         Spacer(Modifier.weight(0.45f))
 
@@ -518,6 +532,87 @@ private fun ManualSearchContent(
         }
 
         Spacer(Modifier.weight(1f))
+    }
+}
+
+// ── Keyword batch panel ─────────────────────────────────────────────────────────
+
+@Composable
+private fun KeywordBatchPanel(items: List<KeywordBatchItem>) {
+    val doneCount = items.count { it.status == CheckStatus.DONE }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape    = RoundedCornerShape(12.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .heightIn(max = 200.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                "Batch: $doneCount/${items.size} hoàn thành",
+                style      = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color      = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+            )
+            Spacer(Modifier.height(6.dp))
+            items.forEach { item -> KeywordBatchRow(item) }
+        }
+    }
+}
+
+@Composable
+private fun KeywordBatchRow(item: KeywordBatchItem) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier          = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+    ) {
+        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+            when (item.status) {
+                CheckStatus.PENDING -> Box(
+                    Modifier.size(7.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f))
+                )
+                CheckStatus.IN_PROGRESS -> CircularProgressIndicator(
+                    modifier    = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                )
+                CheckStatus.DONE -> Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint     = Color(0xFF22C55E),
+                )
+                CheckStatus.ERROR -> Icon(
+                    Icons.Default.Cancel,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint     = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text       = item.keyword,
+            style      = MaterialTheme.typography.bodySmall,
+            fontWeight = if (item.status == CheckStatus.IN_PROGRESS) FontWeight.SemiBold else FontWeight.Normal,
+            color      = when (item.status) {
+                CheckStatus.PENDING     -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                CheckStatus.IN_PROGRESS -> MaterialTheme.colorScheme.primary
+                CheckStatus.DONE        -> MaterialTheme.colorScheme.onSurfaceVariant
+                CheckStatus.ERROR       -> MaterialTheme.colorScheme.error
+            },
+        )
+        if (item.status == CheckStatus.IN_PROGRESS) {
+            Spacer(Modifier.weight(1f))
+            Text(
+                "đang xử lý...",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+            )
+        }
     }
 }
 

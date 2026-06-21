@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
                 val skipProxy    by viewModel.skipProxy.collectAsState()
                 val socketInfo   by viewModel.socketInfo.collectAsState()
                 val isConnected  by viewModel.isConnected.collectAsState()
+                val keywordBatch by viewModel.keywordBatch.collectAsState()
 
                 var viewingResults by remember { mutableStateOf(false) }
 
@@ -66,6 +67,7 @@ class MainActivity : ComponentActivity() {
                             skipProxy         = skipProxy,
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
+                            keywordBatch      = keywordBatch,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
@@ -91,6 +93,7 @@ class MainActivity : ComponentActivity() {
                             skipProxy         = skipProxy,
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
+                            keywordBatch      = keywordBatch,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onSearch          = { _, _ -> },
                         )
@@ -112,6 +115,7 @@ class MainActivity : ComponentActivity() {
                                 skipProxy         = skipProxy,
                                 socketInfo        = socketInfo,
                                 isConnected       = isConnected,
+                                keywordBatch      = keywordBatch,
                                 lastKeyword       = s.keyword,
                                 lastResultCount   = s.results.size,
                                 lastResultInfo    = s.socketInfo,
@@ -128,6 +132,7 @@ class MainActivity : ComponentActivity() {
                             skipProxy         = skipProxy,
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
+                            keywordBatch      = keywordBatch,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
