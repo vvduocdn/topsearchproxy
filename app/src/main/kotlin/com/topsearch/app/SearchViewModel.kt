@@ -353,13 +353,18 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             append("Trạng thái: ${if (results.isNotEmpty()) "Success - OK" else "Không có kết quả"}")
         }
 
+        val queueEmpty = pendingQueueCount == 0 && requestQueue.isEmpty
         if (results.isNotEmpty()) {
-            _state.value = SearchState.Done(keyword, results, screenshotPath, city, proxyIp, info)
             _socketInfo.value = "Đã gửi ${results.size} kết quả"
+            if (queueEmpty) {
+                _state.value = SearchState.Done(keyword, results, screenshotPath, city, proxyIp, info)
+            }
         } else {
-            _state.value = SearchState.Idle
             val msg = "Không có kết quả — chờ keyword tiếp theo"
             _socketInfo.value = msg
+            if (queueEmpty) {
+                _state.value = SearchState.Idle
+            }
             socketDoneJob = viewModelScope.launch {
                 delay(4_000)
                 if (_socketInfo.value == msg) _socketInfo.value = ""

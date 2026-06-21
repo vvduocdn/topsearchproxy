@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -86,19 +87,21 @@ class MainActivity : ComponentActivity() {
                         )
 
                     is SearchState.WebCapturing ->
-                        WebCaptureScreen(
-                            url           = s.url,
-                            keyword       = s.keyword,
-                            proxyHost     = s.proxyHost,
-                            spoofLat      = s.spoofLat,
-                            spoofLng      = s.spoofLng,
-                            onCaptureDone = { paths, jsResults, detectedCity ->
-                                viewModel.onWebCaptureDone(s.keyword, paths, jsResults, detectedCity)
-                            },
-                            onError       = { err ->
-                                viewModel.onWebCaptureError(s.keyword, err)
-                            },
-                        )
+                        key(s.keyword) {
+                            WebCaptureScreen(
+                                url           = s.url,
+                                keyword       = s.keyword,
+                                proxyHost     = s.proxyHost,
+                                spoofLat      = s.spoofLat,
+                                spoofLng      = s.spoofLng,
+                                onCaptureDone = { paths, jsResults, detectedCity ->
+                                    viewModel.onWebCaptureDone(s.keyword, paths, jsResults, detectedCity)
+                                },
+                                onError       = { err ->
+                                    viewModel.onWebCaptureError(s.keyword, err)
+                                },
+                            )
+                        }
 
                     is SearchState.Analyzing ->
                         SearchScreen(
