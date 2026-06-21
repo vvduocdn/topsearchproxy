@@ -191,7 +191,8 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         withTimeoutOrNull(3 * 60 * 1_000L) { done.await() } ?: run {
             Log.w("TopSearch", "processSocketRequest TIMEOUT '$kw'")
             currentDone = null
-            updateBatchStatus(req.requestId, CheckStatus.ERROR)
+            if (socketRequestId == req.requestId) socketRequestId = null
+            updateBatchStatus(req.requestId, CheckStatus.ERROR, "Timeout khi search")
             _state.value = SearchState.Idle
             val suffix = if (pendingQueueCount > 0) " — $pendingQueueCount keyword đang chờ" else ""
             _socketInfo.value = "Hết giờ: \"$kw\"$suffix"
@@ -203,9 +204,24 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         currentDone = null
     }
 
-    private fun updateBatchStatus(requestId: String, status: CheckStatus) {
+    private fun updateBatchStatus(requestId: String, status: CheckStatus, errorMessage: String = "") {
+        val completedAt = if (status == CheckStatus.DONE || status == CheckStatus.ERROR) {
+            SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        } else {
+            ""
+        }
         _keywordBatch.update { list ->
-            list.map { if (it.requestId == requestId) it.copy(status = status) else it }
+            list.map {
+                if (it.requestId == requestId) {
+                    it.copy(
+                        status = status,
+                        errorMessage = if (status == CheckStatus.ERROR) errorMessage else "",
+                        completedAt = completedAt,
+                    )
+                } else {
+                    it
+                }
+            }
         }
         viewModelScope.launch(Dispatchers.IO) {
             val ctx = getApplication<Application>()
@@ -275,7 +291,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         if (screenshotPaths.isEmpty()) {
             _state.value = SearchState.Error("Không lấy được kết quả", keyword)
             if (reqId != null) {
-                updateBatchStatus(reqId, CheckStatus.ERROR)
+                updateBatchStatus(reqId, CheckStatus.ERROR, "Capture không có ảnh/kết quả")
                 showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
             }
             signalDone()
@@ -295,7 +311,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                         updateBatchStatus(reqId, CheckStatus.DONE)
                         SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp)
                     } else {
-                        updateBatchStatus(reqId, CheckStatus.ERROR)
+                        updateBatchStatus(reqId, CheckStatus.ERROR, "OCR không đọc được top")
                     }
                     showSocketDone(results, keyword, firstPath, city, proxyIp, proxyFull, country)
                 } else {
@@ -305,7 +321,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             } catch (e: Exception) {
                 _state.value = if (reqId != null) SearchState.Idle else SearchState.Error("OCR thất bại: ${e.message}", keyword)
                 reqId?.let {
-                    updateBatchStatus(it, CheckStatus.ERROR)
+                    updateBatchStatus(it, CheckStatus.ERROR, "OCR lỗi: ${e.message ?: "unknown"}")
                     showSocketDone(emptyList(), keyword, "", city, proxyIp, proxyFull, country)
                 }
             }
@@ -318,7 +334,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val reqId     = socketRequestId?.also { socketRequestId = null }
         val proxyIp   = capturing?.proxyIp ?: ""
         if (reqId != null) {
-            updateBatchStatus(reqId, CheckStatus.ERROR)
+            updateBatchStatus(reqId, CheckStatus.ERROR, error)
             showSocketDone(emptyList(), keyword, "", "", proxyIp,
                 capturing?.proxyHost ?: "", capturing?.country ?: 1)
         } else {
@@ -422,18 +438,51 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         }
     }
 
+    fun retryBatchKeyword(requestId: String) {
+        val req = batchRequests[requestId] ?: run {
+            Log.w("TopSearch", "retryBatchKeyword: request not found reqId=$requestId")
+            return
+        }
+        _keywordBatch.update { list ->
+            list.map {
+                if (it.requestId == requestId) {
+                    it.copy(
+                        status = CheckStatus.PENDING,
+                        retryCount = it.retryCount + 1,
+                        errorMessage = "",
+                        completedAt = "",
+                    )
+                } else {
+                    it
+                }
+            }
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                KeywordQueueStore.updateStatus(getApplication(), requestId, CheckStatus.PENDING)
+            }
+            SearchBridge.resumeRequest.emit(listOf(req))
+            Log.d("TopSearch", "Manual retry '${req.keyword}' reqId=$requestId")
+        }
+    }
+
     private suspend fun retryErrorKeywords() {
         val errorItems = _keywordBatch.value
-            .filter { it.status == CheckStatus.ERROR && it.retryCount < 3 }
+            .filter { it.status == CheckStatus.ERROR && it.retryCount < 3 && it.isAutoRetryableError() }
         if (errorItems.isEmpty()) return
         val retryReqs = errorItems.mapNotNull { batchRequests[it.requestId] }
         if (retryReqs.isEmpty()) return
-        Log.d("TopSearch", "Auto-retry ${retryReqs.size} ERROR keywords")
+        Log.d("TopSearch", "Auto-retry ${retryReqs.size} retryable ERROR keywords")
         errorItems.forEach { item ->
             _keywordBatch.update { list ->
                 list.map {
                     if (it.requestId == item.requestId)
-                        it.copy(status = CheckStatus.PENDING, retryCount = it.retryCount + 1)
+                        it.copy(
+                            status = CheckStatus.PENDING,
+                            retryCount = it.retryCount + 1,
+                            errorMessage = "",
+                            completedAt = "",
+                        )
                     else it
                 }
             }
@@ -444,6 +493,12 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             }
         }
         SearchBridge.resumeRequest.emit(retryReqs)
+    }
+
+    private fun KeywordBatchItem.isAutoRetryableError(): Boolean {
+        val msg = errorMessage.lowercase()
+        if ("proxy" in msg || "captcha" in msg || "block" in msg) return false
+        return true
     }
 
     companion object {

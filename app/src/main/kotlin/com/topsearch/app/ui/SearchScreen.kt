@@ -88,6 +88,7 @@ fun SearchScreen(
     manualResult:         Pair<String, List<SearchResult>>? = null,
     onManualResultDismiss: () -> Unit                       = {},
     onSkipProxyChange:    (Boolean) -> Unit                 = {},
+    onRetryKeyword:       (String) -> Unit                  = {},
     onSearch:             (keyword: String, city: VietnamCity) -> Unit,
 ) {
     val isLoading = loadingStep.isNotEmpty()
@@ -140,6 +141,7 @@ fun SearchScreen(
                     socketInfo     = socketInfo,
                     keywordBatch   = keywordBatch,
                     keywordResults = keywordResults,
+                    onRetryKeyword = onRetryKeyword,
                     onManualClick  = { showManual = true },
                 )
             }
@@ -157,6 +159,7 @@ private fun StandbyContent(
     socketInfo:     String,
     keywordBatch:   List<KeywordBatchItem>          = emptyList(),
     keywordResults: Map<String, List<SearchResult>> = emptyMap(),
+    onRetryKeyword: (String) -> Unit = {},
     onManualClick:  () -> Unit,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -279,7 +282,7 @@ private fun StandbyContent(
 
         if (keywordBatch.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            KeywordBatchPanel(keywordBatch, keywordResults)
+            KeywordBatchPanel(keywordBatch, keywordResults, onRetryKeyword)
         }
 
         Spacer(Modifier.weight(0.45f))
@@ -511,34 +514,103 @@ private fun ManualSearchContent(
 private fun KeywordBatchPanel(
     items:          List<KeywordBatchItem>,
     keywordResults: Map<String, List<SearchResult>> = emptyMap(),
+    onRetryKeyword: (String) -> Unit = {},
 ) {
+    val totalCount = items.size
     val doneCount = items.count { it.status == CheckStatus.DONE }
-    Card(
+    val runningCount = items.count { it.status == CheckStatus.IN_PROGRESS }
+    val errorCount = items.count { it.status == CheckStatus.ERROR }
+    val progress = if (totalCount == 0) 0f else doneCount / totalCount.toFloat()
+
+    OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
-        colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape    = RoundedCornerShape(12.dp),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+        shape = RoundedCornerShape(10.dp),
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-                .heightIn(max = 200.dp)
-                .verticalScroll(rememberScrollState()),
+                .fillMaxWidth()
+                .padding(vertical = 10.dp),
         ) {
-            Text(
-                "Batch: $doneCount/${items.size} hoàn thành",
-                style      = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color      = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-            )
-            Spacer(Modifier.height(6.dp))
-            items.forEach { item -> KeywordBatchRow(item, keywordResults[item.requestId]) }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Batch keywords",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    val statusText = buildString {
+                        append("$doneCount/$totalCount hoàn thành")
+                        if (runningCount > 0) append(" · $runningCount đang chạy")
+                        if (errorCount > 0) append(" · $errorCount lỗi")
+                    }
+                    Text(
+                        statusText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .width(92.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(99.dp)),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+                    trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 236.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                items.forEachIndexed { index, item ->
+                    KeywordBatchRow(item, keywordResults[item.requestId], onRetryKeyword)
+                    if (index < items.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 46.dp, end = 14.dp),
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f),
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun KeywordBatchRow(item: KeywordBatchItem, results: List<SearchResult>? = null) {
+private fun KeywordBatchRow(
+    item: KeywordBatchItem,
+    results: List<SearchResult>? = null,
+    onRetryKeyword: (String) -> Unit = {},
+) {
     var showResults by remember { mutableStateOf(false) }
+    val canOpenResults = item.status == CheckStatus.DONE
+    val resultCount = results?.size ?: 0
+    val subtitle = when (item.status) {
+        CheckStatus.PENDING -> "Đang chờ"
+        CheckStatus.IN_PROGRESS -> "Đang xử lý"
+        CheckStatus.DONE -> "$resultCount kết quả"
+        CheckStatus.ERROR -> item.errorMessage.ifBlank { "Lỗi chưa rõ" }
+    }
+    val contentColor = when (item.status) {
+        CheckStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+        CheckStatus.IN_PROGRESS -> MaterialTheme.colorScheme.primary
+        CheckStatus.DONE -> MaterialTheme.colorScheme.onSurface
+        CheckStatus.ERROR -> MaterialTheme.colorScheme.error
+    }
 
     if (showResults) {
         KeywordResultsDialog(
@@ -550,15 +622,17 @@ private fun KeywordBatchRow(item: KeywordBatchItem, results: List<SearchResult>?
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier          = Modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = item.status == CheckStatus.DONE) { showResults = true }
-            .padding(vertical = 3.dp),
+            .clickable(enabled = canOpenResults) { showResults = true }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
-        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
             when (item.status) {
                 CheckStatus.PENDING -> Box(
-                    Modifier.size(7.dp).clip(CircleShape)
+                    Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f))
                 )
                 CheckStatus.IN_PROGRESS -> CircularProgressIndicator(
@@ -579,29 +653,43 @@ private fun KeywordBatchRow(item: KeywordBatchItem, results: List<SearchResult>?
                 )
             }
         }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text       = item.keyword,
-            style      = MaterialTheme.typography.bodySmall,
-            fontWeight = if (item.status == CheckStatus.IN_PROGRESS) FontWeight.SemiBold else FontWeight.Normal,
-            color      = when (item.status) {
-                CheckStatus.PENDING     -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-                CheckStatus.IN_PROGRESS -> MaterialTheme.colorScheme.primary
-                CheckStatus.DONE        -> MaterialTheme.colorScheme.onSurfaceVariant
-                CheckStatus.ERROR       -> MaterialTheme.colorScheme.error
-            },
-        )
-        if (item.status == CheckStatus.IN_PROGRESS) {
-            Spacer(Modifier.weight(1f))
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                "đang xử lý...",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                text = item.keyword,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (item.status == CheckStatus.IN_PROGRESS) {
+                    FontWeight.SemiBold
+                } else {
+                    FontWeight.Medium
+                },
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+            Text(
+                text = if (item.completedAt.isNotBlank()) {
+                    "$subtitle · ${item.completedAt}"
+                } else {
+                    subtitle
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = contentColor.copy(alpha = 0.72f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (item.status == CheckStatus.ERROR) {
+            Spacer(Modifier.width(8.dp))
+            TextButton(
+                onClick = { onRetryKeyword(item.requestId) },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text("Thử lại", style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }
-
 @Composable
 private fun KeywordResultsDialog(
     keyword:   String,

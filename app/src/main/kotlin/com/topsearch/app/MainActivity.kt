@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
                             onSkipProxyChange = viewModel::setSkipProxy,
+                            onRetryKeyword    = viewModel::retryBatchKeyword,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
 
@@ -112,6 +113,7 @@ class MainActivity : ComponentActivity() {
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
                             onSkipProxyChange = viewModel::setSkipProxy,
+                            onRetryKeyword    = viewModel::retryBatchKeyword,
                             onSearch          = { _, _ -> },
                         )
 
@@ -126,6 +128,7 @@ class MainActivity : ComponentActivity() {
                                                         s.keyword to s.results else null,
                             onManualResultDismiss = viewModel::reset,
                             onSkipProxyChange     = viewModel::setSkipProxy,
+                            onRetryKeyword        = viewModel::retryBatchKeyword,
                             onSearch              = { kw, city -> viewModel.startSearch(kw, city) },
                         )
 
@@ -139,6 +142,7 @@ class MainActivity : ComponentActivity() {
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
                             onSkipProxyChange = viewModel::setSkipProxy,
+                            onRetryKeyword    = viewModel::retryBatchKeyword,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
                 }
