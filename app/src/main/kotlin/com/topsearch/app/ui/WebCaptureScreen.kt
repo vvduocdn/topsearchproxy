@@ -530,13 +530,31 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             }
         }
 
+        function isAllowedGoogleProductUrl(realUrl) {
+            try {
+                var u = new URL(realUrl);
+                var host = u.hostname.toLowerCase();
+                var path = u.pathname.toLowerCase();
+
+                if (host.indexOf('play.google.') === 0) return true;
+                if (host.indexOf('docs.google.') === 0) return true;
+                if ((host === 'www.google.com' || host === 'google.com') && path.indexOf('/docs/about') >= 0) return true;
+                if (host === 'workspace.google.com' && path.indexOf('/products/docs') >= 0) return true;
+                if (host === 'support.google.com' && path.indexOf('/docs/') === 0) return true;
+
+                return false;
+            } catch(e) {
+                return false;
+            }
+        }
+
         function allowedUrl(realUrl) {
             if (!realUrl || realUrl.indexOf('http') !== 0) return false;
             if (realUrl.indexOf('/aclk?') >= 0) return false;
             if (realUrl.indexOf('googleadservices') >= 0) return false;
             try {
-                var host = new URL(realUrl).hostname;
-                if (host.indexOf('google.') >= 0 && host.indexOf('play.google.') !== 0) return false;
+                var host = new URL(realUrl).hostname.toLowerCase();
+                if (host.indexOf('google.') >= 0 && !isAllowedGoogleProductUrl(realUrl)) return false;
                 if (host.indexOf('gstatic.') >= 0) return false;
                 if (host.indexOf('googleusercontent.') >= 0) return false;
                 return true;
@@ -554,6 +572,15 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             }
         }
 
+        function isAllowedGoogleResultLink(link) {
+            try {
+                var realUrl = resolveUrl(link);
+                return isAllowedGoogleProductUrl(realUrl);
+            } catch(e) {
+                return false;
+            }
+        }
+
         function isNimoLikeLink(link) {
             try {
                 var realUrl = resolveUrl(link);
@@ -561,6 +588,16 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             } catch(e) {
                 return false;
             }
+        }
+
+        function isImagePackResult(link) {
+            if (!link || !link.closest) return false;
+            return !!link.closest('.ULSxyf, #iur, [data-iu], [data-viewer-group]');
+        }
+
+        function isKnowledgePanelResult(link) {
+            if (!link || !link.closest) return false;
+            return !!link.closest('.EyBRub, [data-kpid], g-scrolling-carousel');
         }
 
         function cleanTitle(text) {
@@ -638,6 +675,8 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 
         function addResult(link, requireH3) {
             if (requireH3 && !link.querySelector('h3')) return;
+            if (isImagePackResult(link)) return;
+            if (isKnowledgePanelResult(link)) return;
             if (isAdBlock(link)) return;
 
             var realUrl = resolveUrl(link);
@@ -669,26 +708,23 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 
         // Modern/mobile organic cards can use direct zReHs/UWckNb links instead of /url?q=.
         // Nimo-related domains may appear as direct media/result links, so keep them in this pass too.
-        if (primaryCount > 0) {
-            var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"]');
-            for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
-                if (!isOrganicDirectLink(organicDirectLinks[o]) && !isNimoLikeLink(organicDirectLinks[o])) continue;
-                addResult(organicDirectLinks[o], false);
-            }
+        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"]');
+        for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
+            if (!isOrganicDirectLink(organicDirectLinks[o]) && !isNimoLikeLink(organicDirectLinks[o])) continue;
+            addResult(organicDirectLinks[o], false);
         }
 
-        // Special case: Google Play organic results often use direct href instead of /url?q=.
+        // Direct organic cards: mobile Google may render real results as direct hrefs.
         if (primaryCount > 0) {
-            var directLinks = document.querySelectorAll('a[href^="https://play.google."], a[href^="http://play.google."]');
+            var directLinks = document.querySelectorAll('a.UBFage[href], a[href].UBFage, a[href^="https://play.google."], a[href^="http://play.google."], a[href^="https://docs.google."], a[href^="http://docs.google."]');
             for (var d = 0; d < directLinks.length && results.length < 20; d++) {
-                if (!isPlayGoogleLink(directLinks[d])) continue;
                 addResult(directLinks[d], false);
             }
         }
 
         // Mobile fallback: Google WebView often renders direct result cards as a.UBFage and h3=0.
         if (primaryCount === 0) {
-            var mobileLinks = document.querySelectorAll('a.UBFage[href], a[href].UBFage, a[href^="https://play.google."], a[href^="http://play.google."], a[href*="nimo"]');
+            var mobileLinks = document.querySelectorAll('a.UBFage[href], a[href].UBFage, a[href^="https://play.google."], a[href^="http://play.google."], a[href^="https://docs.google."], a[href^="http://docs.google."], a[href*="nimo"]');
             for (var j = 0; j < mobileLinks.length && results.length < 20; j++) {
                 addResult(mobileLinks[j], false);
             }

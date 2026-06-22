@@ -84,13 +84,29 @@ class JSExtractionLogicTest {
         }
     }
 
+    private fun isAllowedGoogleProductUrl(realUrl: String): Boolean {
+        return try {
+            val url = java.net.URL(realUrl)
+            val host = url.host.lowercase()
+            val path = url.path.lowercase()
+
+            host.startsWith("play.google.") ||
+                host.startsWith("docs.google.") ||
+                ((host == "www.google.com" || host == "google.com") && path.contains("/docs/about")) ||
+                (host == "workspace.google.com" && path.contains("/products/docs")) ||
+                (host == "support.google.com" && path.startsWith("/docs/"))
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun allowedUrl(realUrl: String): Boolean {
         if (realUrl.isBlank() || !realUrl.startsWith("http")) return false
         if (realUrl.contains("/aclk?")) return false
         if (realUrl.contains("googleadservices")) return false
         return try {
-            val host = java.net.URL(realUrl).host
-            if (host.contains("google.") && !host.contains("play.google.")) return false
+            val host = java.net.URL(realUrl).host.lowercase()
+            if (host.contains("google.") && !isAllowedGoogleProductUrl(realUrl)) return false
             if (host.contains("gstatic.")) return false
             if (host.contains("googleusercontent.")) return false
             true
@@ -249,6 +265,27 @@ class JSExtractionLogicTest {
     fun `allowedUrl ALLOWS Google Play URLs`() {
         assertTrue(allowedUrl("https://play.google.com/store/apps/details?id=com.facebook"))
         assertTrue(allowedUrl("https://play.google.com/store/apps/collection/recommended"))
+    }
+
+    @Test
+    fun `allowedUrl allows Google Docs organic URLs`() {
+        assertTrue(allowedUrl("https://docs.google.com/forms/d/abc/edit"))
+        assertTrue(allowedUrl("https://docs.google.com/document/d/abc/edit"))
+    }
+
+    @Test
+    fun `allowedUrl allows Google Docs product organic URLs`() {
+        assertTrue(allowedUrl("https://www.google.com/intx/vi/docs/about/"))
+        assertTrue(allowedUrl("https://workspace.google.com/intl/vi/products/docs/"))
+        assertTrue(allowedUrl("https://support.google.com/docs/answer/7068618?hl=vi"))
+    }
+
+    @Test
+    fun `allowedUrl keeps other Google internal URLs rejected`() {
+        assertFalse(allowedUrl("https://www.google.com/search?q=docs"))
+        assertFalse(allowedUrl("https://www.google.com/maps/place/test"))
+        assertFalse(allowedUrl("https://support.google.com/websearch/answer/123"))
+        assertFalse(allowedUrl("https://workspace.google.com/intl/vi/products/gmail/"))
     }
 
     @Test
