@@ -151,7 +151,13 @@ private val EXTRACT_JS = """
             '[aria-label="Kết quả được tài trợ"]',
             '.mnr-c',
             '.commercial-unit-desktop-top',
-            '.cu-container'
+            '.cu-container',
+            '.EyBRub', '[data-kpid]',
+            'g-scrolling-carousel',
+            '[data-maindata*="LOCAL_NAV"]',
+            '.P6Deab',
+            '[data-phone-number]',
+            '[data-url*="maps.google"]'
         ];
 
         function isExcluded(el) {
@@ -306,7 +312,13 @@ private val EXTRACT_VISUAL_RESULTS_JS = """
             '[aria-label="Kết quả được tài trợ"]',
             '.mnr-c',
             '.commercial-unit-desktop-top',
-            '.cu-container'
+            '.cu-container',
+            '.EyBRub', '[data-kpid]',
+            'g-scrolling-carousel',
+            '[data-maindata*="LOCAL_NAV"]',
+            '.P6Deab',
+            '[data-phone-number]',
+            '[data-url*="maps.google"]'
         ];
 
         function isExcluded(el) {
@@ -563,6 +575,11 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             }
         }
 
+        function isAdUrl(href) {
+            href = href || '';
+            return href.indexOf('/aclk?') >= 0 || href.indexOf('googleadservices') >= 0;
+        }
+
         function isPlayGoogleLink(link) {
             try {
                 var realUrl = resolveUrl(link);
@@ -590,6 +607,43 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             }
         }
 
+        function isYouTubeLikeUrl(realUrl) {
+            try {
+                var host = new URL(realUrl).hostname.toLowerCase();
+                return host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com');
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function isYouTubeLikeLink(link) {
+            try {
+                return isYouTubeLikeUrl(resolveUrl(link));
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function isFacebookVideoUrl(realUrl) {
+            try {
+                var u = new URL(realUrl);
+                var host = u.hostname.toLowerCase();
+                var path = u.pathname.toLowerCase();
+                var isFacebookHost = host === 'facebook.com' || host.endsWith('.facebook.com');
+                return isFacebookHost && (path.indexOf('/videos/') >= 0 || path.indexOf('/watch') === 0);
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function isFacebookVideoLink(link) {
+            try {
+                return isFacebookVideoUrl(resolveUrl(link));
+            } catch(e) {
+                return false;
+            }
+        }
+
         function isImagePackResult(link) {
             if (!link || !link.closest) return false;
             return !!link.closest('.ULSxyf, #iur, [data-iu], [data-viewer-group]');
@@ -597,7 +651,32 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 
         function isKnowledgePanelResult(link) {
             if (!link || !link.closest) return false;
-            return !!link.closest('.EyBRub, [data-kpid], g-scrolling-carousel');
+           return !!link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel') ||
+                isLocalPanelResult(link);
+        }
+        
+        function isLocalPanelResult(el) {
+        if (!el || !el.closest) return false;
+        if (el.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"]')) return true;
+
+        // Local/business panel actions (Trang web, Goi dien, Duong di...) are real links
+        // but not organic top results, so skip them without touching normal result cards.
+        var localAction = el.closest('.P6Deab, [data-phone-number], [data-url*="maps.google"], a[href*="/maps/"], a[href*="maps.google."]');
+        if (!localAction) return false;
+
+        var label = norm(localAction.innerText || localAction.textContent || localAction.getAttribute('aria-label') || '');
+        return label === 'trang web' ||
+            label === 'goi dien' ||
+            label === 'duong di' ||
+            label === 'chia se' ||
+            label === 'luu' ||
+            !!localAction.closest('[role="dialog"], c-wiz, .MjjYud');
+       }
+
+        function isHiddenResult(el) {
+            if (!el || !el.closest) return false;
+            var hidden = el.closest('[hidden], [aria-hidden="true"], [style*="display:none"], [style*="display: none"], [style*="opacity:0"], [style*="opacity: 0"]');
+            return !!hidden;
         }
 
         function cleanTitle(text) {
@@ -673,13 +752,41 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             return lines.length >= 3 ? lines.slice(2).join(' ') : (lines[1] || lines[0] || '');
         }
 
+        function resultOrderKey(el) {
+            try {
+                var rposEl = el.closest && el.closest('[data-rpos]');
+                if (rposEl) {
+                    var rpos = parseInt(rposEl.getAttribute('data-rpos') || '', 10);
+                    if (!isNaN(rpos)) return rpos;
+                }
+
+                var card = (el.closest && el.closest('.MjjYud, [data-snc], .N54PNb, [data-hveid]')) || el;
+                var rect = card.getBoundingClientRect ? card.getBoundingClientRect() : null;
+                if (rect) return 10000 + Math.max(0, rect.top + (window.scrollY || window.pageYOffset || 0));
+            } catch(e) {}
+            return 999999999;
+        }
+
+        function outputResults() {
+            results.sort(function(a, b) {
+                var ay = typeof a.y === 'number' ? a.y : 999999999;
+                var by = typeof b.y === 'number' ? b.y : 999999999;
+                return ay - by;
+            });
+            return results.map(function(r) {
+                return { t: r.t, d: r.d, u: r.u, ad: r.ad };
+            });
+        }
+
         function addResult(link, requireH3) {
             if (requireH3 && !link.querySelector('h3')) return;
+            if (isHiddenResult(link)) return;
             if (isImagePackResult(link)) return;
+
+            var realUrl = resolveUrl(link);
             if (isKnowledgePanelResult(link)) return;
             if (isAdBlock(link)) return;
 
-            var realUrl = resolveUrl(link);
             if (!allowedUrl(realUrl)) return;
             if (seen[realUrl]) return;
 
@@ -689,13 +796,79 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
                     ? cleanTitle(link.querySelector('h3').innerText || link.querySelector('h3').textContent || '')
                     : (isPlayGoogleLink(link)
                         ? titleFromPlayGoogleLink(link, u.hostname)
-                        : ((isOrganicDirectLink(link) || isNimoLikeLink(link)) ? titleFromOrganicDirectLink(link, u.hostname) : titleFromMobileLink(link, u.hostname)));
+                        : ((isOrganicDirectLink(link) || isNimoLikeLink(link) || isYouTubeLikeLink(link) || isFacebookVideoLink(link)) ? titleFromOrganicDirectLink(link, u.hostname) : titleFromMobileLink(link, u.hostname)));
                 if (!title || title.length < 3 || title.length > 200) return;
 
                 seen[realUrl] = true;
-                results.push({ t: title, d: u.hostname, u: realUrl, ad: false });
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(link), ad: false });
             } catch(e) {}
         }
+
+        function addYouTubeVideoBlock(block) {
+            if (!block || isImagePackResult(block)) return;
+            if (isHiddenResult(block)) return;
+            if (isKnowledgePanelResult(block)) return;
+            if (isAdBlock(block)) return;
+
+            var realUrl = block.getAttribute('data-curl') || block.getAttribute('data-surl') || '';
+            if (!isYouTubeLikeUrl(realUrl)) return;
+            if (!allowedUrl(realUrl)) return;
+            if (seen[realUrl]) return;
+
+            try {
+                var u = new URL(realUrl);
+                var titleEl = block.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb, h1');
+                var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+                if (!title || title.length < 3 || title.length > 200) return;
+
+                seen[realUrl] = true;
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(block), ad: false });
+            } catch(e) {}
+        }
+
+        function findAllowedLinkNearHeading(heading) {
+            if (!heading) return null;
+
+            var direct = heading.closest && heading.closest('a[href]');
+            if (direct && !isAdUrl(direct.getAttribute('href') || direct.href || '') && allowedUrl(resolveUrl(direct))) return direct;
+
+            var card = (heading.closest && heading.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid], .uIV6Ge')) || heading.parentElement;
+            var links = card && card.querySelectorAll ? card.querySelectorAll('a[href]') : [];
+            for (var i = 0; i < links.length; i++) {
+                if (isAdUrl(links[i].getAttribute('href') || links[i].href || '')) continue;
+                if (isHiddenResult(links[i])) continue;
+                if (isImagePackResult(links[i])) continue;
+                if (isKnowledgePanelResult(links[i])) continue;
+                if (isAdBlock(links[i])) continue;
+                if (allowedUrl(resolveUrl(links[i]))) return links[i];
+            }
+            return null;
+        }
+
+        function addHeadingResult(heading) {
+            if (!heading) return;
+            if (isHiddenResult(heading)) return;
+            if (isImagePackResult(heading)) return;
+            if (isKnowledgePanelResult(heading)) return;
+            if (isAdBlock(heading)) return;
+
+            var title = cleanTitle(heading.innerText || heading.textContent || '');
+            if (!title || title.length < 3 || title.length > 200) return;
+
+            var link = findAllowedLinkNearHeading(heading);
+            if (!link) return;
+
+            var realUrl = resolveUrl(link);
+            if (!allowedUrl(realUrl)) return;
+            if (seen[realUrl]) return;
+
+            try {
+                var u = new URL(realUrl);
+                seen[realUrl] = true;
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(heading), ad: false });
+            } catch(e) {}
+        }
+
 
         // Primary: same idea as backend CheckRankListResult.
         var redirectLinks = document.querySelectorAll(
@@ -708,10 +881,28 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
 
         // Modern/mobile organic cards can use direct zReHs/UWckNb links instead of /url?q=.
         // Nimo-related domains may appear as direct media/result links, so keep them in this pass too.
-        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"]');
+        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"], a[href*="facebook.com/"]');
         for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
-            if (!isOrganicDirectLink(organicDirectLinks[o]) && !isNimoLikeLink(organicDirectLinks[o])) continue;
+            if (!isOrganicDirectLink(organicDirectLinks[o]) &&
+                !isNimoLikeLink(organicDirectLinks[o]) &&
+                !isYouTubeLikeLink(organicDirectLinks[o]) &&
+                !isFacebookVideoLink(organicDirectLinks[o])) continue;
             addResult(organicDirectLinks[o], false);
+        }
+
+        // YouTube video cards can expose the canonical URL on the video block instead of a standard result anchor.
+        var youtubeVideoBlocks = document.querySelectorAll('[data-curl*="youtube.com/watch"], [data-surl*="youtube.com/watch"], [data-curl*="youtu.be/"], [data-surl*="youtu.be/"]');
+        for (var y = 0; y < youtubeVideoBlocks.length && results.length < 20; y++) {
+            addYouTubeVideoBlock(youtubeVideoBlocks[y]);
+        }
+
+        // Some Google mobile layouts render titles as DIV[role=heading]/.F0FGWb and put the URL
+        // on a nearby anchor with changing classes, so recover from the heading's own card.
+        if (results.length === 0) {
+            var headingCards = document.querySelectorAll('[role="heading"], .F0FGWb, .LC20lb, .MBeuO');
+            for (var h = 0; h < headingCards.length && results.length < 20; h++) {
+                addHeadingResult(headingCards[h]);
+            }
         }
 
         // Direct organic cards: mobile Google may render real results as direct hrefs.
@@ -730,7 +921,7 @@ private val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
             }
         }
 
-        return JSON.stringify(results);
+        return JSON.stringify(outputResults());
     } catch(e) {
         return JSON.stringify([{ t: 'ERROR:' + e.message, d: '', u: '', ad: false }]);
     }
@@ -758,7 +949,13 @@ private fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = "
             '[aria-label="Kết quả được tài trợ"]',
             '.mnr-c',
             '.commercial-unit-desktop-top',
-            '.cu-container'
+            '.cu-container',
+            '.EyBRub', '[data-kpid]',
+            'g-scrolling-carousel',
+            '[data-maindata*="LOCAL_NAV"]',
+            '.P6Deab',
+            '[data-phone-number]',
+            '[data-url*="maps.google"]'
         ];
 
         function isExcluded(el) {

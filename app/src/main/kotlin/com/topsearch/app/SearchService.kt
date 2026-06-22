@@ -153,8 +153,12 @@ class SearchService : Service() {
             scope.launch {
                 Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount")
                 Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
-                if (screenshotPaths.isEmpty() && results.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: thiếu cả ảnh lẫn kết quả")
+                if (screenshotPaths.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: missing image")
+                    return@launch
+                }
+                if (results.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: missing top")
                     return@launch
                 }
                 screenshotPaths.forEachIndexed { i, p ->
@@ -162,10 +166,14 @@ class SearchService : Service() {
                     Log.d(TAG, "  screenshot[$i]=$p exists=${file.exists()} size=${file.length()}B")
                 }
 
-                // Submit: < 10 results = all; >= 10 results = first 10
-                val toSubmit = if (totalCount < 10) results else results.take(10)
+                // Submit only items that have enough payload fields.
+                val validResults = results.filter { it.domain.isNotBlank() && it.url.isNotBlank() }
+                if (validResults.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: top missing domain/url")
+                    return@launch
+                }
+                val toSubmit = if (totalCount < 10) validResults else validResults.take(10)
 
-                // Telegram upload is best-effort — failure must NOT block server submit
                 val imageUrls = mutableListOf<String>()
                 val message = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
                 Log.d(TAG, "TELEGRAM messageLen=${message.length} lines=${toSubmit.size}")
@@ -176,19 +184,18 @@ class SearchService : Service() {
                         imageUrls.add(url)
                         Log.d(TAG, "  upload[$i] OK -> $url")
                     } else {
-                        Log.w(TAG, "  upload[$i] FAILED path=$path (continuing submit anyway)")
+                        Log.w(TAG, "  upload[$i] FAILED path=$path")
                     }
+                }
+                if (imageUrls.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: upload image failed")
+                    return@launch
                 }
                 if (message.isNotBlank()) {
-                    if (imageUrls.isNotEmpty()) {
-                        Log.d(TAG, "TELEGRAM send text after image upload")
-                        val sentText = TelegramUploader.sendMessage(message)
-                        Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
-                    } else {
-                        Log.w(TAG, "TELEGRAM skip text message because image upload failed")
-                    }
+                    Log.d(TAG, "TELEGRAM send text after image upload")
+                    val sentText = TelegramUploader.sendMessage(message)
+                    Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
                 }
-
                 Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")
                 toSubmit.forEachIndexed { i, r ->
                     Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
