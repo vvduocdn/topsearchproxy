@@ -37,6 +37,7 @@ class SignalRClient(
     private var handshakeDone: Boolean   = false
 
     fun connect() {
+        Log.d(TAG, ">>> CONNECTING to $url")
         val req = Request.Builder().url(url).build()
         ws = http.newWebSocket(req, Listener())
     }
@@ -91,7 +92,8 @@ class SignalRClient(
     private inner class Listener : WebSocketListener() {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            Log.d(TAG, "Connected -> handshake")
+            Log.d(TAG, "✅ WS CONNECTED — HTTP ${response.code} ${response.message}")
+            Log.d(TAG, "✅ Sending handshake: {\"protocol\":\"json\",\"version\":1}")
             webSocket.send("""{"protocol":"json","version":1}$RS""")
         }
 
@@ -101,15 +103,17 @@ class SignalRClient(
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            Log.e(TAG, "WS failure: ${t.message}")
+            Log.e(TAG, "❌ WS FAILURE: ${t.message}")
+            Log.e(TAG, "❌ Response: ${response?.code} ${response?.message}")
+            t.printStackTrace()
             handshakeDone = false
             onDisconnected()
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            Log.d(TAG, "WS closed $code: $reason")
+            Log.w(TAG, "⚠️ WS CLOSED code=$code reason=$reason")
             handshakeDone = false
-            if (code != 1000) onDisconnected()
+            onDisconnected()
         }
     }
 
@@ -121,7 +125,8 @@ class SignalRClient(
 
             if (!handshakeDone) {
                 handshakeDone = true
-                Log.d(TAG, "Handshake OK - server: $raw")
+                Log.d(TAG, "✅ HANDSHAKE OK — server replied: $raw")
+                Log.d(TAG, "✅ READY — waiting for CheckKeywords from server...")
                 return
             }
 
@@ -138,9 +143,12 @@ class SignalRClient(
     }
 
     private fun handleInvocation(json: JSONObject) {
-        when (json.optString("target")) {
+        val target = json.optString("target")
+        Log.d(TAG, "📩 INVOCATION received — target=\"$target\"")
+        when (target) {
             "CheckKeywords" -> handleCheckKeywords(json)
             "CheckKeyword"  -> handleCheckKeyword(json)
+            else -> Log.w(TAG, "⚠️ Unknown target: \"$target\" — full: ${json.toString().take(300)}")
         }
     }
 
@@ -157,9 +165,12 @@ class SignalRClient(
             if (keyword.isBlank() || requestId.isBlank()) continue
             batch += SearchBridge.SocketRequest(requestId, keyword, proxy, country)
         }
-        if (batch.isEmpty()) return
-        Log.d(TAG, "CheckKeywords: ${batch.size} keywords")
-        batch.forEachIndexed { i, r -> Log.d(TAG, "  [$i] \"${r.keyword}\" proxy=${r.proxy} reqId=${r.requestId}") }
+        if (batch.isEmpty()) {
+            Log.w(TAG, "⚠️ CheckKeywords: parsed 0 valid keywords from ${arr.length()} items")
+            return
+        }
+        Log.d(TAG, "📩 CheckKeywords: ${batch.size} keywords received!")
+        batch.forEachIndexed { i, r -> Log.d(TAG, "  [$i] keyword=\"${r.keyword}\" proxy=${r.proxy} country=${r.country} reqId=${r.requestId}") }
         onBatch(batch)
     }
 
@@ -170,7 +181,7 @@ class SignalRClient(
         val keyword   = payload.optString("keyword")
         val proxy     = payload.optString("proxy")
         val country   = payload.optInt("country", 1)
-        Log.d(TAG, "CheckKeyword (single): \"$keyword\" proxy=$proxy reqId=$requestId")
+        Log.d(TAG, "📩 CheckKeyword (single): keyword=\"$keyword\" proxy=$proxy country=$country reqId=$requestId")
         onBatch(listOf(SearchBridge.SocketRequest(requestId, keyword, proxy, country)))
     }
 }
