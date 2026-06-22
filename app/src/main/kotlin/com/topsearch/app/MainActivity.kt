@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
                                 url           = s.url,
                                 keyword       = s.keyword,
                                 proxyHost     = s.proxyHost,
+                                publicIp      = s.proxyIp,
                                 spoofLat      = s.spoofLat,
                                 spoofLng      = s.spoofLng,
                                 onCaptureDone = { paths, jsResults, detectedCity ->

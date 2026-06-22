@@ -95,6 +95,7 @@ class SignalRClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
+            Log.d(TAG, "onMessage len=${text.length} preview=${text.take(120).replace(RS.toString(), "<RS>")}")
             text.split(RS).filter { it.isNotBlank() }.forEach(::handleFrame)
         }
 
@@ -125,7 +126,7 @@ class SignalRClient(
 
             when (json.optInt("type")) {
                 1 -> handleInvocation(json)
-                6 -> ws?.send("""{"type":6}$RS""")
+                6 -> { Log.d(TAG, "Ping → Pong"); ws?.send("""{"type":6}$RS""") }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Frame error: ${e.message}")

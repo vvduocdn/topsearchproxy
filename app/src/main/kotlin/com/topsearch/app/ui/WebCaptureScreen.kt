@@ -1174,7 +1174,8 @@ private val LOCATION_JS = """
 fun WebCaptureScreen(
     url:       String,
     keyword:   String = "",
-    proxyHost: String = "",   // "host:port" — blank = trực tiếp (không qua proxy)
+    proxyHost: String = "",
+    publicIp:  String = "",
     spoofLat:  Double = 0.0,
     spoofLng:  Double = 0.0,
     onCaptureDone: (screenshotPaths: List<String>, jsResults: List<SearchResult>, detectedCity: String) -> Unit,
@@ -1350,7 +1351,7 @@ fun WebCaptureScreen(
         // ── Bước 5: Chụp ảnh ─────────────────────────────────────────────
         // Capture full page trước để Google lazy-render đủ kết quả cuối trang.
         val captureOutput = try {
-            val output = captureWebViewTiles(wv, context.getExternalFilesDir(null))
+            val output = captureWebViewTiles(wv, context.getExternalFilesDir(null), publicIp)
             Log.d(TAG, "Captured ${output.paths.size} tile(s)")
             output
         } catch (e: Exception) {
@@ -1698,10 +1699,12 @@ private fun logParsedTopResults(results: List<SearchResult>) {
  * Capture full page bằng PixelCopy.
  * Scroll theo CSS px, ghép theo actualY và crop overlap để tránh trùng ảnh.
  */
-private suspend fun captureWebViewTiles(webView: WebView, dir: File?): CaptureOutput {
+private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: String = ""): CaptureOutput {
     val w       = webView.width.takeIf { it > 0 } ?: 1080
     val viewHPx = webView.height.takeIf { it > 0 } ?: 1920
-    val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+    val now     = Date()
+    val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(now)
+    val tsDisplay = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(now)
     val base    = dir ?: File("/sdcard")
 
     // PixelCopy cần vùng WebView thật trên màn hình (real on-screen rect).
@@ -1730,13 +1733,38 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?): CaptureOu
     var chunkIndex = 1
 
     // Lưu chunk hiện tại: trang thường 1 file, trang quá cao thì nhiều part.
-    fun saveChunkIfNeeded(force: Boolean = false) {
+    fun saveChunkIfNeeded(force: Boolean = false, isLast: Boolean = false) {
         if (!chunkHasPixels && !force) return
         val suffix = if (chunkIndex == 1 && totalPhysH <= MAX_CAPTURE_CHUNK_HEIGHT_PX) {
             "full"
         } else {
             "part_%02d".format(chunkIndex)
         }
+
+        // Vẽ overlay time + IP chỉ trên chunk cuối (footer của trang)
+        if (isLast) {
+            val overlayCanvas = Canvas(chunkBitmap)
+            val line1 = "Time: $tsDisplay"
+            val line2 = if (publicIp.isNotBlank()) "IP: $publicIp" else null
+            val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color    = android.graphics.Color.WHITE
+                textSize = (chunkBitmap.width * 0.025f).coerceIn(24f, 40f)
+                typeface = android.graphics.Typeface.MONOSPACE
+            }
+            val bgPaint = android.graphics.Paint().apply { color = 0xCC000000.toInt() }
+            val pad   = (textPaint.textSize * 0.5f).toInt()
+            val lineH = (textPaint.textSize * 1.35f).toInt()
+            val lines = listOfNotNull(line1, line2)
+            val boxW  = (lines.maxOf { textPaint.measureText(it) } + pad * 2).toInt()
+            val boxH  = lineH * lines.size + pad
+            val boxL  = (chunkBitmap.width - boxW).toFloat()
+            val boxT  = (chunkBitmap.height - boxH).toFloat()
+            overlayCanvas.drawRect(boxL, boxT, chunkBitmap.width.toFloat(), chunkBitmap.height.toFloat(), bgPaint)
+            lines.forEachIndexed { i, text ->
+                overlayCanvas.drawText(text, boxL + pad, boxT + pad + textPaint.textSize + lineH * i, textPaint)
+            }
+        }
+
         val file = File(base, "topsearch_${ts}_$suffix.jpg")
         FileOutputStream(file).use {
             chunkBitmap.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_JPEG_QUALITY, it)
@@ -1838,7 +1866,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?): CaptureOu
     }
 
     tileBmp.recycle()
-    saveChunkIfNeeded(force = paths.isEmpty())
+    saveChunkIfNeeded(force = paths.isEmpty(), isLast = true)
     chunkBitmap.recycle()
     setCaptureOverlaysHidden(webView, hide = false)
 
