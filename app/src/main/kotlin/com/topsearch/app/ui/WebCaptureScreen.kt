@@ -1747,7 +1747,11 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
         if (isLast) {
             val overlayCanvas = Canvas(chunkBitmap)
             val line1 = "Time: $tsDisplay"
-            val line2: String? = null
+            val line2: String? = if (publicIp.isNotBlank()) {
+                val parts = publicIp.split(".")
+                val masked = if (parts.size == 4) "${parts[0]}.***.${parts[3]}" else publicIp
+                "IP: $masked"
+            } else null
             val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 color    = android.graphics.Color.WHITE
                 textSize = (chunkBitmap.width * 0.025f).coerceIn(24f, 40f)
