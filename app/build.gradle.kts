@@ -31,7 +31,10 @@ android {
             buildConfigField(
                 "String",
                 "SOCKET_URL",
-                "\"wss://topsearch-signalr-test.onrender.com/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u\"",
+                "\"wss://api.domainstatus.live/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u\"",
+//                "String",
+//                "SOCKET_URL",
+//                "\"wss://topsearch-signalr-test.onrender.com/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u\"",
             )
             manifestPlaceholders["usesCleartextTraffic"] = "true"
         }
