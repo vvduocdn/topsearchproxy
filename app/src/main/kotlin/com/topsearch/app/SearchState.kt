@@ -25,14 +25,15 @@ sealed class SearchState {
 
     /** WebView đang load Google Search trong app */
     data class WebCapturing(
-        val keyword:   String,
-        val url:       String,
-        val city:      String = "",
-        val spoofLat:  Double = 0.0,
-        val spoofLng:  Double = 0.0,
-        val proxyHost: String = "",
-        val proxyIp:   String = "",
-        val country:   Int    = 1,
+        val keyword:    String,
+        val url:        String,
+        val city:       String = "",
+        val spoofLat:   Double = 0.0,
+        val spoofLng:   Double = 0.0,
+        val proxyHost:  String = "",
+        val proxyIp:    String = "",
+        val country:    Int    = 1,
+        val captureSeq: Int    = 0,
     ) : SearchState()
 
     /** JS / OCR đang phân tích */

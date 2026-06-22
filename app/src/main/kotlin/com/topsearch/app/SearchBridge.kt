@@ -45,6 +45,9 @@ object SearchBridge {
     /** ViewModel → Service: re-queue pending keywords after app restart (crash recovery) */
     val resumeRequest = MutableSharedFlow<List<SocketRequest>>(extraBufferCapacity = 8)
 
+    /** ViewModel → Service: manually inject a test keyword through the full socket flow */
+    val testRequest = MutableSharedFlow<SocketRequest>(extraBufferCapacity = 8)
+
     /** Service → ViewModel: result is invalid for submit, mark keyword as failed */
     val submitFailure = MutableSharedFlow<SubmitFailure>(extraBufferCapacity = 16)
 
@@ -58,12 +61,14 @@ object SearchBridge {
         screenshotPaths: List<String> = emptyList(),
         publicIp:      String         = "",
         totalCount:    Int            = results.size,
+        checkedAt:     Long           = 0L,
     ) {
-        callbacks.remove(requestId)?.invoke(results, screenshotPaths, publicIp, totalCount)
+        android.util.Log.d("SearchBridge", "dispatchResult reqId=$requestId checkedAt=$checkedAt")
+        callbacks.remove(requestId)?.invoke(results, screenshotPaths, publicIp, totalCount, checkedAt)
     }
 
     /** Called by Service before emitting [incoming] */
-    fun registerCallback(requestId: String, cb: (List<SearchResult>, List<String>, String, Int) -> Unit) {
+    fun registerCallback(requestId: String, cb: (List<SearchResult>, List<String>, String, Int, Long) -> Unit) {
         callbacks[requestId] = cb
     }
 
@@ -83,5 +88,5 @@ object SearchBridge {
         submitSuccess.emit(SubmitSuccess(requestId))
     }
 
-    private val callbacks = ConcurrentHashMap<String, (List<SearchResult>, List<String>, String, Int) -> Unit>()
+    private val callbacks = ConcurrentHashMap<String, (List<SearchResult>, List<String>, String, Int, Long) -> Unit>()
 }

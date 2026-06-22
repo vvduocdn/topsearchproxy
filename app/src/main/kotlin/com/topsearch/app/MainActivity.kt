@@ -99,11 +99,12 @@ class MainActivity : ComponentActivity() {
                             onOpenHistory     = viewModel::openHistory,
                             onDeleteHistoryAll = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay = viewModel::deleteHistoryDay,
+                            onTestKeyword     = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
 
                     is SearchState.WebCapturing ->
-                        key(s.keyword) {
+                        key(s.captureSeq) {
                             WebCaptureScreen(
                                 url           = s.url,
                                 keyword       = s.keyword,
@@ -111,8 +112,8 @@ class MainActivity : ComponentActivity() {
                                 publicIp      = s.proxyIp,
                                 spoofLat      = s.spoofLat,
                                 spoofLng      = s.spoofLng,
-                                onCaptureDone = { paths, jsResults, detectedCity ->
-                                    viewModel.onWebCaptureDone(s.keyword, paths, jsResults, detectedCity)
+                                onCaptureDone = { paths, jsResults, detectedCity, checkedAt ->
+                                    viewModel.onWebCaptureDone(s.keyword, paths, jsResults, detectedCity, checkedAt)
                                 },
                                 onError       = { err ->
                                     viewModel.onWebCaptureError(s.keyword, err)
@@ -134,6 +135,7 @@ class MainActivity : ComponentActivity() {
                             onOpenHistory     = viewModel::openHistory,
                             onDeleteHistoryAll = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay = viewModel::deleteHistoryDay,
+                            onTestKeyword     = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
                             onSearch          = { _, _ -> },
                         )
 
@@ -153,6 +155,7 @@ class MainActivity : ComponentActivity() {
                             onOpenHistory         = viewModel::openHistory,
                             onDeleteHistoryAll    = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay    = viewModel::deleteHistoryDay,
+                            onTestKeyword         = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
                             onSearch              = { kw, city -> viewModel.startSearch(kw, city) },
                         )
 
@@ -171,6 +174,7 @@ class MainActivity : ComponentActivity() {
                             onOpenHistory     = viewModel::openHistory,
                             onDeleteHistoryAll = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay = viewModel::deleteHistoryDay,
+                            onTestKeyword     = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
                 }

@@ -1,6 +1,8 @@
 package com.topsearch.app
 
 import android.util.Log
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -14,6 +16,8 @@ private const val FILE_BASE = "https://api.telegram.org/file/bot$BOT_TOKEN"
 private const val BOT_BASE  = "https://api.telegram.org/bot$BOT_TOKEN"
 
 object TelegramUploader {
+
+    private val uploadMutex = Mutex()
 
     fun buildResultMessage(keyword: String, items: List<SearchResult>, maxItems: Int = 10): String {
         if (items.isEmpty()) return ""
@@ -30,7 +34,7 @@ object TelegramUploader {
         return lines.joinToString("\n")
     }
 
-    fun uploadFirstThenSendResults(paths: List<String>, keyword: String, items: List<SearchResult>): String {
+    suspend fun uploadFirstThenSendResults(paths: List<String>, keyword: String, items: List<SearchResult>): String {
         val firstPath = paths.firstOrNull().orEmpty()
         val imageUrl = upload(firstPath)
         val message = buildResultMessage(keyword, items)
@@ -47,21 +51,34 @@ object TelegramUploader {
      * Upload all local JPEGs, return list of public URLs (skips failures).
      * Sends with optional caption for the first image.
      */
-    fun uploadAll(paths: List<String>, caption: String = ""): List<String> =
+    suspend fun uploadAll(paths: List<String>, caption: String = ""): List<String> =
         paths.mapIndexedNotNull { i, p ->
             upload(p, if (i == 0) caption else "").takeIf { it.isNotBlank() }
         }
 
     /**
      * Upload local JPEG to Telegram channel, return public HTTP URL.
-     * If caption is non-blank, sends it with the first image via sendDocument caption.
-     * Blank on failure.
+     * Serialized via mutex to avoid concurrent uploads hitting Telegram rate limits.
+     * Retries once with 3s delay on failure. Blank on final failure.
      */
-    fun upload(filePath: String, caption: String = ""): String {
+    suspend fun upload(filePath: String, caption: String = ""): String {
         if (filePath.isBlank()) return ""
         val file = File(filePath)
         if (!file.exists()) { Log.e(TAG, "File not found: $filePath"); return "" }
         Log.d(TAG, "upload: ${file.name}  size=${file.length()}B captionLen=${caption.length}")
+        return uploadMutex.withLock {
+            doUpload(file, caption).let { result ->
+                if (result.isNotBlank()) result
+                else {
+                    Log.w(TAG, "upload retry after 3s: ${file.name}")
+                    kotlinx.coroutines.delay(3_000)
+                    doUpload(file, caption)
+                }
+            }
+        }
+    }
+
+    private fun doUpload(file: File, caption: String): String {
         return try {
             val fileId = sendDocument(file, caption) ?: return ""
             Log.d(TAG, "  file_id = $fileId")

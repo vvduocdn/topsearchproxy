@@ -22,6 +22,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import com.topsearch.app.TelegramUploader
 
 private const val TAG        = "SearchService"
@@ -60,6 +61,7 @@ class SearchService : Service() {
             workersStarted = true
             scope.launch { connectLoop() }
             scope.launch { observeResumeRequests() }
+            scope.launch { observeTestRequests() }
         }
         return START_STICKY
     }
@@ -102,7 +104,14 @@ class SearchService : Service() {
     private suspend fun observeResumeRequests() {
         SearchBridge.resumeRequest.collect { requests ->
             Log.d(TAG, "Resume: re-queue ${requests.size} pending keyword(s)")
-            enqueueRequests(requests, publishBatch = false)
+            enqueueRequests(requests, publishBatch = false, bringToFront = false)
+        }
+    }
+
+    private suspend fun observeTestRequests() {
+        SearchBridge.testRequest.collect { req ->
+            Log.d(TAG, "TestRequest: keyword='${req.keyword}' proxy='${req.proxy}' country=${req.country}")
+            enqueueRequests(listOf(req), publishBatch = true, bringToFront = false)
         }
     }
 
@@ -113,7 +122,7 @@ class SearchService : Service() {
         )
     }
 
-    private fun enqueueRequests(requests: List<SearchBridge.SocketRequest>, publishBatch: Boolean) {
+    private fun enqueueRequests(requests: List<SearchBridge.SocketRequest>, publishBatch: Boolean, bringToFront: Boolean = true) {
         val valid = requests.filter { it.requestId.isNotBlank() && it.keyword.isNotBlank() }
         if (valid.isEmpty()) {
             Log.w(TAG, "enqueueRequests ignored empty/invalid batch size=${requests.size}")
@@ -130,7 +139,7 @@ class SearchService : Service() {
         showNotif("Dang search: ${valid.first().keyword}${if (valid.size > 1) " (+${valid.size - 1})" else ""}")
         if (alreadyProcessing) {
             Log.d(TAG, "Already processing; appended ${valid.size} keyword(s) to queue only")
-        } else {
+        } else if (bringToFront) {
             startMainActivity()
         }
 
@@ -149,61 +158,63 @@ class SearchService : Service() {
 
     private fun registerResultCallback(req: SearchBridge.SocketRequest) {
         val requestId = req.requestId
-        SearchBridge.registerCallback(requestId) { results, screenshotPaths, publicIp, totalCount ->
+        SearchBridge.registerCallback(requestId) { results, screenshotPaths, publicIp, totalCount, checkedAt ->
             scope.launch {
-                Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount")
-                Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
-                if (screenshotPaths.isEmpty() && results.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: thiếu cả ảnh lẫn kết quả")
-                    return@launch
-                }
-                screenshotPaths.forEachIndexed { i, p ->
-                    val file = java.io.File(p)
-                    Log.d(TAG, "  screenshot[$i]=$p exists=${file.exists()} size=${file.length()}B")
-                }
-
-                // Submit only items that have enough payload fields.
-                val validResults = results.filter { it.domain.isNotBlank() && it.url.isNotBlank() }
-                if (validResults.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: top missing domain/url")
-                    return@launch
-                }
-                val toSubmit = if (totalCount < 10) validResults else validResults.take(10)
-
-                val imageUrls = mutableListOf<String>()
-                val message = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
-                Log.d(TAG, "TELEGRAM messageLen=${message.length} lines=${toSubmit.size}")
-                screenshotPaths.take(1).forEachIndexed { i, path ->
-                    Log.d(TAG, "  upload[$i] $path")
-                    val url = TelegramUploader.upload(path)
-                    if (url.isNotBlank()) {
-                        imageUrls.add(url)
-                        Log.d(TAG, "  upload[$i] OK -> $url")
-                    } else {
-                        Log.w(TAG, "  upload[$i] FAILED path=$path")
+                withTimeoutOrNull(90_000L) {
+                    Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount checkedAt=$checkedAt")
+                    Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
+                    if (screenshotPaths.isEmpty() && results.isEmpty()) {
+                        failSubmit(requestId, req.keyword, "Submit fail: thiếu cả ảnh lẫn kết quả")
+                        return@withTimeoutOrNull
                     }
-                }
-                if (message.isNotBlank()) {
-                    if (imageUrls.isNotEmpty()) {
-                        Log.d(TAG, "TELEGRAM send text after image upload")
-                        val sentText = TelegramUploader.sendMessage(message)
-                        Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
-                    } else {
-                        Log.w(TAG, "TELEGRAM skip text message because image upload failed")
+                    screenshotPaths.forEachIndexed { i, p ->
+                        val file = java.io.File(p)
+                        Log.d(TAG, "  screenshot[$i]=$p exists=${file.exists()} size=${file.length()}B")
                     }
-                }
-                Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")
-                toSubmit.forEachIndexed { i, r ->
-                    Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
-                }
 
-                val sent = activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName) ?: false
-                if (sent) {
-                    SearchBridge.emitSubmitSuccess(requestId)
-                    showNotif("Da gui ket qua - cho keyword tiep theo")
-                } else {
-                    failSubmit(requestId, req.keyword, "Submit fail: socket send loi")
-                }
+                    // Submit only items that have enough payload fields.
+                    val validResults = results.filter { it.domain.isNotBlank() && it.url.isNotBlank() }
+                    if (validResults.isEmpty()) {
+                        failSubmit(requestId, req.keyword, "Submit fail: top missing domain/url")
+                        return@withTimeoutOrNull
+                    }
+                    val toSubmit = if (totalCount < 10) validResults else validResults.take(10)
+
+                    val imageUrls = mutableListOf<String>()
+                    val message = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
+                    Log.d(TAG, "TELEGRAM messageLen=${message.length} lines=${toSubmit.size}")
+                    screenshotPaths.take(1).forEachIndexed { i, path ->
+                        Log.d(TAG, "  upload[$i] $path")
+                        val url = TelegramUploader.upload(path)
+                        if (url.isNotBlank()) {
+                            imageUrls.add(url)
+                            Log.d(TAG, "  upload[$i] OK -> $url")
+                        } else {
+                            Log.w(TAG, "  upload[$i] FAILED path=$path")
+                        }
+                    }
+                    if (message.isNotBlank()) {
+                        if (imageUrls.isNotEmpty()) {
+                            Log.d(TAG, "TELEGRAM send text after image upload")
+                            val sentText = TelegramUploader.sendMessage(message)
+                            Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
+                        } else {
+                            Log.w(TAG, "TELEGRAM skip text message because image upload failed")
+                        }
+                    }
+                    Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")
+                    toSubmit.forEachIndexed { i, r ->
+                        Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
+                    }
+
+                    val sent = activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName, checkedAt) ?: false
+                    if (sent) {
+                        SearchBridge.emitSubmitSuccess(requestId)
+                        showNotif("Da gui ket qua - cho keyword tiep theo")
+                    } else {
+                        failSubmit(requestId, req.keyword, "Submit fail: socket send loi")
+                    }
+                } ?: failSubmit(requestId, req.keyword, "Submit fail: timeout 90s")
             }
         }
     }

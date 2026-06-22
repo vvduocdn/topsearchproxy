@@ -96,6 +96,7 @@ fun SearchScreen(
     onOpenHistory:        () -> Unit                        = {},
     onDeleteHistoryAll:   () -> Unit                        = {},
     onDeleteHistoryDay:   (String) -> Unit                  = {},
+    onTestKeyword:        (keyword: String, proxy: String) -> Unit = { _, _ -> },
     onSearch:             (keyword: String, city: VietnamCity) -> Unit,
 ) {
     val isLoading = loadingStep.isNotEmpty()
@@ -159,6 +160,7 @@ fun SearchScreen(
                     keywordBatch   = keywordBatch,
                     keywordResults = keywordResults,
                     onRetryKeyword = onRetryKeyword,
+                    onTestKeyword  = onTestKeyword,
                     onHistoryClick = {
                         onOpenHistory()
                         showHistory = true
@@ -181,6 +183,7 @@ private fun StandbyContent(
     keywordBatch:   List<KeywordBatchItem>          = emptyList(),
     keywordResults: Map<String, List<SearchResult>> = emptyMap(),
     onRetryKeyword: (String) -> Unit = {},
+    onTestKeyword:  (keyword: String, proxy: String) -> Unit = { _, _ -> },
     onHistoryClick: () -> Unit = {},
     onManualClick:  () -> Unit,
 ) {
@@ -337,6 +340,11 @@ private fun StandbyContent(
         //     }
         // }
 
+        // ── Test keyword panel ─────────────────────────────────────────────
+        TestKeywordPanel(isLoading = isLoading, onTestKeyword = onTestKeyword)
+
+        Spacer(Modifier.height(8.dp))
+
         // ── Manual button ──────────────────────────────────────────────────
         OutlinedButton(
             onClick  = onManualClick,
@@ -350,6 +358,98 @@ private fun StandbyContent(
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+// ── Test keyword panel ──────────────────────────────────────────────────────────
+
+@Composable
+private fun TestKeywordPanel(
+    isLoading:    Boolean,
+    onTestKeyword: (keyword: String, proxy: String) -> Unit,
+) {
+    val defaultProxy = "117.5.220.204:33978:lnjgv_itweb:dqzFqlTn"
+    var expanded  by remember { mutableStateOf(false) }
+    var keyword   by remember { mutableStateOf("") }
+    var proxy     by remember { mutableStateOf(defaultProxy) }
+    val keyboard  = LocalSoftwareKeyboardController.current
+
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape    = RoundedCornerShape(12.dp),
+        colors   = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(
+                modifier          = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Test keyword",
+                    style      = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier   = Modifier.weight(1f),
+                    color      = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    if (expanded) "Thu gọn" else "Mở rộng",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter   = expandVertically() + fadeIn(),
+                exit    = shrinkVertically() + fadeOut(),
+            ) {
+                Column(modifier = Modifier.padding(top = 10.dp)) {
+                    OutlinedTextField(
+                        value         = keyword,
+                        onValueChange = { keyword = it },
+                        enabled       = !isLoading,
+                        placeholder   = { Text("Keyword cần test", fontSize = 13.sp) },
+                        singleLine    = true,
+                        shape         = RoundedCornerShape(10.dp),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier      = Modifier.fillMaxWidth(),
+                        textStyle     = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value         = proxy,
+                        onValueChange = { proxy = it },
+                        enabled       = !isLoading,
+                        placeholder   = { Text("Proxy (tuỳ chọn, vd: host:port:user:pass)", fontSize = 12.sp) },
+                        singleLine    = true,
+                        shape         = RoundedCornerShape(10.dp),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
+                        modifier      = Modifier.fillMaxWidth(),
+                        textStyle     = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            keyboard?.hide()
+                            val kw = keyword.trim()
+                            if (kw.isNotBlank()) {
+                                onTestKeyword(kw, proxy.trim())
+                                keyword = ""
+                                proxy   = defaultProxy
+                            }
+                        },
+                        enabled  = !isLoading && keyword.isNotBlank(),
+                        shape    = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Thêm vào queue", fontSize = 14.sp)
+                    }
+                }
+            }
+        }
     }
 }
 

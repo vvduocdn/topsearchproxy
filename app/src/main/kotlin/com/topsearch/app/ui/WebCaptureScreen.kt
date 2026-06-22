@@ -69,6 +69,7 @@ private const val CHROME_UA =
 private data class CaptureOutput(
     val paths: List<String>,
     val results: List<SearchResult>,
+    val checkedAt: Long = 0L,
 )
 
 /** Dump trang để biết Google đang render cái gì */
@@ -1178,7 +1179,7 @@ fun WebCaptureScreen(
     publicIp:  String = "",
     spoofLat:  Double = 0.0,
     spoofLng:  Double = 0.0,
-    onCaptureDone: (screenshotPaths: List<String>, jsResults: List<SearchResult>, detectedCity: String) -> Unit,
+    onCaptureDone: (screenshotPaths: List<String>, jsResults: List<SearchResult>, detectedCity: String, checkedAt: Long) -> Unit,
     onError:       (String) -> Unit,
 ) {
     val context        = LocalContext.current
@@ -1372,7 +1373,8 @@ fun WebCaptureScreen(
 
         // Chỉ scroll về đầu sau khi đã lấy top xong.
         wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
-        onCaptureDone(captureOutput.paths, jsResults, rawCity)
+        Log.d(TAG, "onCaptureDone checkedAt=${captureOutput.checkedAt} paths=${captureOutput.paths.size}")
+        onCaptureDone(captureOutput.paths, jsResults, rawCity, captureOutput.checkedAt)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1745,7 +1747,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
         if (isLast) {
             val overlayCanvas = Canvas(chunkBitmap)
             val line1 = "Time: $tsDisplay"
-            val line2 = if (publicIp.isNotBlank()) "IP: $publicIp" else null
+            val line2: String? = null
             val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 color    = android.graphics.Color.WHITE
                 textSize = (chunkBitmap.width * 0.025f).coerceIn(24f, 40f)
@@ -1871,7 +1873,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
     setCaptureOverlaysHidden(webView, hide = false)
 
     Log.d(TAG, "Full page saved as ${paths.size} file(s), tiles=$idx dpr=$dpr totalPhysH=$totalPhysH capturedBottom=$capturedBottom overlapCss=$overlapCss")
-    return CaptureOutput(paths, emptyList())
+    return CaptureOutput(paths, emptyList(), now.time)
 }
 
 private fun createChunkBitmap(width: Int, totalHeight: Int, chunkTop: Int): Bitmap {

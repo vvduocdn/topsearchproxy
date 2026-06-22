@@ -47,6 +47,7 @@ class SignalRClient(
         imageUrls:  List<String> = emptyList(),
         publicIp:   String       = "",
         sourceName: String       = "",
+        checkedAt:  Long         = 0L,
     ): Boolean {
         val top10 = items.take(10)
         val itemsArr = JSONArray()
@@ -65,6 +66,7 @@ class SignalRClient(
             put("mobileImageUrl", if (imageUrl.isNotBlank()) imageUrl else JSONObject.NULL)
             put("publicIp",     if (publicIp.isNotBlank())   publicIp   else JSONObject.NULL)
             put("sourceName",   if (sourceName.isNotBlank()) sourceName else JSONObject.NULL)
+            put("checkedAt",    if (checkedAt > 0L) checkedAt else JSONObject.NULL)
         }
 
         val msg = JSONObject().apply {
@@ -73,7 +75,7 @@ class SignalRClient(
             put("arguments", JSONArray().apply { put(payload) })
         }.toString() + RS
 
-        Log.d(TAG, "Submit reqId=$requestId items=${top10.size}")
+        Log.d(TAG, "Submit reqId=$requestId items=${top10.size} checkedAt=$checkedAt")
         top10.forEachIndexed { i, r -> Log.d(TAG, "  [${i+1}] rank=${r.rank} domain=${r.domain} url=${r.url}") }
         val sent = ws?.send(msg) ?: false
         if (!sent) Log.e(TAG, "Submit FAILED reqId=$requestId")

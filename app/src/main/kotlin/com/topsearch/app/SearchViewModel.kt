@@ -77,6 +77,8 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     // Lookup requestId → SocketRequest để auto-retry sau khi batch kết thúc
     private val batchRequests = mutableMapOf<String, SearchBridge.SocketRequest>()
 
+    private var captureSeq = 0
+
     // Kết quả đã check theo requestId — user nhấn keyword row để xem lại
     private val _keywordResults = MutableStateFlow<Map<String, List<SearchResult>>>(emptyMap())
     val keywordResults: StateFlow<Map<String, List<SearchResult>>> = _keywordResults.asStateFlow()
@@ -180,21 +182,6 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             }
         } else ""
 
-        // Trả kết quả cache ngay nếu đã check keyword này trước đó
-        val cacheKey = cacheKey(kw, req.country)
-        // Socket result must include a fresh screenshot, so do not submit cached ranks.
-        val cachedResults: List<SearchResult>? = null
-        if (cachedResults != null) {
-            Log.d("TopSearch", "Cache HIT '$kw' country=${req.country} -> ${cachedResults.size} results")
-            socketRequestId = null
-            updateBatchStatus(req.requestId, CheckStatus.DONE)
-            SearchBridge.dispatchResult(req.requestId, cachedResults, emptyList(), proxyIp, cachedResults.size)
-            val suffix = if (pendingQueueCount > 0) " (còn $pendingQueueCount đang chờ)" else ""
-            _socketInfo.value = "[Cache] \"$kw\" -> ${cachedResults.size} ket qua$suffix"
-            _state.value = SearchState.Idle
-            return
-        }
-
         val googleUrl = when (req.country) {
             2    -> "https://www.google.co.th/?hl=th&gl=th&pws=0"
             else -> "https://www.google.com.vn/?hl=vi&gl=vn&pws=0"
@@ -204,14 +191,15 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         currentDone = done
 
         _state.value = SearchState.WebCapturing(
-            keyword   = kw,
-            city      = "",
-            url       = googleUrl,
-            spoofLat  = 0.0,
-            spoofLng  = 0.0,
-            proxyHost = effectiveProxy,
-            proxyIp   = proxyIp,
-            country   = req.country,
+            keyword    = kw,
+            city       = "",
+            url        = googleUrl,
+            spoofLat   = 0.0,
+            spoofLng   = 0.0,
+            proxyHost  = effectiveProxy,
+            proxyIp    = proxyIp,
+            country    = req.country,
+            captureSeq = ++captureSeq,
         )
 
         // Suspend until WebCapture finishes (onWebCaptureDone / onWebCaptureError)
@@ -334,14 +322,25 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             } else ""
 
             _state.value = SearchState.WebCapturing(
-                keyword   = kw,
-                city      = cityLabel,
-                url       = "https://www.google.com.vn/?hl=vi&gl=vn&pws=0",
-                spoofLat  = 0.0,
-                spoofLng  = 0.0,
-                proxyHost = proxyPick,
-                proxyIp   = proxyIp,
+                keyword    = kw,
+                city       = cityLabel,
+                url        = "https://www.google.com.vn/?hl=vi&gl=vn&pws=0",
+                spoofLat   = 0.0,
+                spoofLng   = 0.0,
+                proxyHost  = proxyPick,
+                proxyIp    = proxyIp,
+                captureSeq = ++captureSeq,
             )
+        }
+    }
+
+    fun addTestKeyword(keyword: String, proxy: String = "", country: Int = 1) {
+        val kw = keyword.trim().ifBlank { return }
+        val requestId = "test_${System.currentTimeMillis()}"
+        val req = SearchBridge.SocketRequest(requestId, kw, proxy, country)
+        viewModelScope.launch {
+            Log.d("TopSearch", "addTestKeyword: kw='$kw' proxy='$proxy' country=$country reqId=$requestId")
+            SearchBridge.testRequest.emit(req)
         }
     }
 
@@ -350,7 +349,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         screenshotPaths: List<String>,
         jsResults:       List<SearchResult>,
         detectedCity:    String = "",
+        checkedAt:       Long   = 0L,
     ) {
+        Log.d("TopSearch", "onWebCaptureDone keyword=$keyword checkedAt=$checkedAt")
         val capturing  = _state.value as? SearchState.WebCapturing
         val city       = detectedCity.ifBlank { capturing?.city ?: "" }
         val proxyIp    = capturing?.proxyIp ?: ""
@@ -364,7 +365,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             resultCache[cacheKey(keyword, country)] = jsResults
             reqId?.let { _keywordResults.value = _keywordResults.value + (it to jsResults) }
             if (reqId != null) {
-                SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp, jsResults.size)
+                SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp, jsResults.size, checkedAt)
                 showSocketDone(jsResults, keyword, firstPath, city, proxyIp, proxyFull, country)
             } else {
                 _state.value = SearchState.Done(keyword, jsResults, firstPath, city, proxyIp)
