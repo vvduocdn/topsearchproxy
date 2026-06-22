@@ -153,12 +153,8 @@ class SearchService : Service() {
             scope.launch {
                 Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount")
                 Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
-                if (screenshotPaths.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: thiếu ảnh")
-                    return@launch
-                }
-                if (results.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: thiếu top")
+                if (screenshotPaths.isEmpty() && results.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: thiếu cả ảnh lẫn kết quả")
                     return@launch
                 }
                 screenshotPaths.forEachIndexed { i, p ->
@@ -166,9 +162,11 @@ class SearchService : Service() {
                     Log.d(TAG, "  screenshot[$i]=$p exists=${file.exists()} size=${file.length()}B")
                 }
 
-                val imageUrls = mutableListOf<String>()
                 // Submit: < 10 results = all; >= 10 results = first 10
                 val toSubmit = if (totalCount < 10) results else results.take(10)
+
+                // Telegram upload is best-effort — failure must NOT block server submit
+                val imageUrls = mutableListOf<String>()
                 val message = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
                 Log.d(TAG, "TELEGRAM messageLen=${message.length} lines=${toSubmit.size}")
                 screenshotPaths.take(1).forEachIndexed { i, path ->
@@ -178,19 +176,17 @@ class SearchService : Service() {
                         imageUrls.add(url)
                         Log.d(TAG, "  upload[$i] OK -> $url")
                     } else {
-                        Log.w(TAG, "  upload[$i] FAILED path=$path")
+                        Log.w(TAG, "  upload[$i] FAILED path=$path (continuing submit anyway)")
                     }
                 }
-                if (imageUrls.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: upload ảnh lỗi")
-                    return@launch
-                }
-                if (message.isNotBlank() && imageUrls.isNotEmpty()) {
-                    Log.d(TAG, "TELEGRAM send text after image upload")
-                    val sentText = TelegramUploader.sendMessage(message)
-                    Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
-                } else if (message.isNotBlank()) {
-                    Log.w(TAG, "TELEGRAM skip text message because image upload failed")
+                if (message.isNotBlank()) {
+                    if (imageUrls.isNotEmpty()) {
+                        Log.d(TAG, "TELEGRAM send text after image upload")
+                        val sentText = TelegramUploader.sendMessage(message)
+                        Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
+                    } else {
+                        Log.w(TAG, "TELEGRAM skip text message because image upload failed")
+                    }
                 }
 
                 Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")
