@@ -153,12 +153,8 @@ class SearchService : Service() {
             scope.launch {
                 Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount")
                 Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
-                if (screenshotPaths.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: missing image")
-                    return@launch
-                }
-                if (results.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: missing top")
+                if (screenshotPaths.isEmpty() && results.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: thiếu cả ảnh lẫn kết quả")
                     return@launch
                 }
                 screenshotPaths.forEachIndexed { i, p ->
@@ -187,14 +183,14 @@ class SearchService : Service() {
                         Log.w(TAG, "  upload[$i] FAILED path=$path")
                     }
                 }
-                if (imageUrls.isEmpty()) {
-                    failSubmit(requestId, req.keyword, "Submit fail: upload image failed")
-                    return@launch
-                }
                 if (message.isNotBlank()) {
-                    Log.d(TAG, "TELEGRAM send text after image upload")
-                    val sentText = TelegramUploader.sendMessage(message)
-                    Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
+                    if (imageUrls.isNotEmpty()) {
+                        Log.d(TAG, "TELEGRAM send text after image upload")
+                        val sentText = TelegramUploader.sendMessage(message)
+                        Log.d(TAG, "TELEGRAM textMessage sent=$sentText")
+                    } else {
+                        Log.w(TAG, "TELEGRAM skip text message because image upload failed")
+                    }
                 }
                 Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")
                 toSubmit.forEachIndexed { i, r ->
