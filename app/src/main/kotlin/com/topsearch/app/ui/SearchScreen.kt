@@ -27,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -46,6 +48,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.style.TextOverflow
 import com.topsearch.app.CheckStatus
 import com.topsearch.app.KeywordBatchItem
+import com.topsearch.app.KeywordQueueStore
 import com.topsearch.app.SearchResult
 
 data class VietnamCity(
@@ -85,14 +88,19 @@ fun SearchScreen(
     isConnected:          Boolean              = false,
     keywordBatch:         List<KeywordBatchItem>            = emptyList(),
     keywordResults:       Map<String, List<SearchResult>>   = emptyMap(),
+    historyEntries:       List<KeywordQueueStore.Entry>     = emptyList(),
     manualResult:         Pair<String, List<SearchResult>>? = null,
     onManualResultDismiss: () -> Unit                       = {},
     onSkipProxyChange:    (Boolean) -> Unit                 = {},
     onRetryKeyword:       (String) -> Unit                  = {},
+    onOpenHistory:        () -> Unit                        = {},
+    onDeleteHistoryAll:   () -> Unit                        = {},
+    onDeleteHistoryDay:   (String) -> Unit                  = {},
     onSearch:             (keyword: String, city: VietnamCity) -> Unit,
 ) {
     val isLoading = loadingStep.isNotEmpty()
     var showManual by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
 
     if (manualResult != null && manualResult.second.isNotEmpty()) {
         KeywordResultsDialog(
@@ -108,6 +116,15 @@ fun SearchScreen(
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        if (showHistory) {
+            SearchHistoryScreen(
+                entries = historyEntries,
+                onBack = { showHistory = false },
+                onDeleteAll = onDeleteHistoryAll,
+                onDeleteDay = onDeleteHistoryDay,
+            )
+            return@Surface
+        }
         AnimatedContent(
             targetState = showManual,
             transitionSpec = {
@@ -142,6 +159,10 @@ fun SearchScreen(
                     keywordBatch   = keywordBatch,
                     keywordResults = keywordResults,
                     onRetryKeyword = onRetryKeyword,
+                    onHistoryClick = {
+                        onOpenHistory()
+                        showHistory = true
+                    },
                     onManualClick  = { showManual = true },
                 )
             }
@@ -160,6 +181,7 @@ private fun StandbyContent(
     keywordBatch:   List<KeywordBatchItem>          = emptyList(),
     keywordResults: Map<String, List<SearchResult>> = emptyMap(),
     onRetryKeyword: (String) -> Unit = {},
+    onHistoryClick: () -> Unit = {},
     onManualClick:  () -> Unit,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -201,7 +223,11 @@ private fun StandbyContent(
                 "TopSearch",
                 style      = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
             )
+            IconButton(onClick = onHistoryClick) {
+                Icon(Icons.Default.History, contentDescription = "Lịch sử")
+            }
             ConnectionBadge(isConnected)
         }
 
@@ -287,29 +313,29 @@ private fun StandbyContent(
 
         Spacer(Modifier.weight(0.45f))
 
-        AnimatedVisibility(
-            visible = socketInfo.isNotEmpty(),
-            enter   = fadeIn() + expandVertically(),
-            exit    = fadeOut() + shrinkVertically(),
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                ),
-                shape = RoundedCornerShape(14.dp),
-            ) {
-                Text(
-                    text       = socketInfo,
-                    color      = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier   = Modifier.padding(14.dp),
-                    style      = MaterialTheme.typography.bodySmall,
-                    lineHeight = 19.sp,
-                )
-            }
-        }
+        // AnimatedVisibility(
+        //     visible = socketInfo.isNotEmpty(),
+        //     enter   = fadeIn() + expandVertically(),
+        //     exit    = fadeOut() + shrinkVertically(),
+        // ) {
+        //     Card(
+        //         modifier = Modifier
+        //             .fillMaxWidth()
+        //             .padding(bottom = 12.dp),
+        //         colors = CardDefaults.cardColors(
+        //             containerColor = MaterialTheme.colorScheme.primaryContainer,
+        //         ),
+        //         shape = RoundedCornerShape(14.dp),
+        //     ) {
+        //         Text(
+        //             text       = socketInfo,
+        //             color      = MaterialTheme.colorScheme.onPrimaryContainer,
+        //             modifier   = Modifier.padding(14.dp),
+        //             style      = MaterialTheme.typography.bodySmall,
+        //             lineHeight = 19.sp,
+        //         )
+        //     }
+        // }
 
         // ── Manual button ──────────────────────────────────────────────────
         OutlinedButton(
@@ -509,6 +535,220 @@ private fun ManualSearchContent(
 }
 
 // ── Keyword batch panel ─────────────────────────────────────────────────────────
+
+@Composable
+private fun SearchHistoryScreen(
+    entries: List<KeywordQueueStore.Entry>,
+    onBack: () -> Unit,
+    onDeleteAll: () -> Unit,
+    onDeleteDay: (String) -> Unit,
+) {
+    val groups = remember(entries) {
+        entries
+            .sortedWith(compareByDescending<KeywordQueueStore.Entry> { it.queuedAt }.thenBy { it.keyword })
+            .groupBy { it.queuedAt }
+    }
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            Surface(tonalElevation = 2.dp) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${entries.size} keyword",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(
+                        onClick = onDeleteAll,
+                        enabled = entries.isNotEmpty(),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Xóa tất cả")
+                    }
+                }
+            }
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(padding)
+                .padding(horizontal = 18.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại")
+                }
+                Text(
+                    "Lịch sử keyword",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            if (entries.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Chưa có lịch sử",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    groups.forEach { (day, dayEntries) ->
+                        HistoryDayGroup(day, dayEntries, onDeleteDay)
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryDayGroup(
+    day: String,
+    entries: List<KeywordQueueStore.Entry>,
+    onDeleteDay: (String) -> Unit,
+) {
+    val done = entries.count { it.status == CheckStatus.DONE }
+    val error = entries.count { it.status == CheckStatus.ERROR }
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(vertical = 10.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(day, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "${entries.size} keyword · $done done · $error lỗi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { onDeleteDay(day) }) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Xóa ngày", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            entries.forEachIndexed { index, item ->
+                HistoryRow(item)
+                if (index < entries.lastIndex) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 14.dp, end = 14.dp),
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRow(item: KeywordQueueStore.Entry) {
+    val statusText = when (item.status) {
+        CheckStatus.PENDING -> "Đang chờ"
+        CheckStatus.IN_PROGRESS -> "Đang xử lý"
+        CheckStatus.DONE -> "Hoàn thành"
+        CheckStatus.ERROR -> item.errorMessage.ifBlank { "Lỗi chưa rõ" }
+    }
+    val statusColor = when (item.status) {
+        CheckStatus.DONE -> Color(0xFF16A34A)
+        CheckStatus.ERROR -> MaterialTheme.colorScheme.error
+        CheckStatus.IN_PROGRESS -> MaterialTheme.colorScheme.primary
+        CheckStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                item.keyword,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                item.status.name,
+                style = MaterialTheme.typography.labelSmall,
+                color = statusColor,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            "Country: ${item.country} · Retry: ${item.retryCount}" +
+                if (item.completedAt.isNotBlank()) " · Time: ${item.completedAt}" else "",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            "Proxy: ${item.proxy.ifBlank { "N/A" }}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            "Request: ${item.requestId}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.66f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (item.status == CheckStatus.ERROR) {
+            Text(
+                statusText,
+                style = MaterialTheme.typography.labelSmall,
+                color = statusColor,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
 
 @Composable
 private fun KeywordBatchPanel(

@@ -55,6 +55,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private val _pendingQueuePrompt = MutableStateFlow(false)
     val pendingQueuePrompt: StateFlow<Boolean> = _pendingQueuePrompt.asStateFlow()
 
+    private val _historyEntries = MutableStateFlow<List<KeywordQueueStore.Entry>>(emptyList())
+    val historyEntries: StateFlow<List<KeywordQueueStore.Entry>> = _historyEntries.asStateFlow()
+
     fun setSkipProxy(skip: Boolean) { _skipProxy.value = skip }
 
     // requestId của CheckKeyword đang xử lý (null nếu search thủ công từ UI)
@@ -79,19 +82,25 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     val keywordResults: StateFlow<Map<String, List<SearchResult>>> = _keywordResults.asStateFlow()
 
     init {
+        refreshHistory()
         // Populate batch status list when server sends a new batch; persist to disk for crash recovery
         viewModelScope.launch {
             SearchBridge.incomingBatch.collect { requests ->
                 _pendingQueuePrompt.value = false  // dismiss resume dialog if server sends fresh batch
-                val newItems = requests.map { KeywordBatchItem(it.requestId, it.keyword) }
-                _keywordBatch.value = newItems + _keywordBatch.value
+                val requestIds = requests.map { it.requestId }.toSet()
+                val currentById = _keywordBatch.value.associateBy { it.requestId }
+                val newItems = requests.map { req ->
+                    currentById[req.requestId] ?: KeywordBatchItem(req.requestId, req.keyword)
+                }
+                _keywordBatch.value = newItems + _keywordBatch.value.filterNot { it.requestId in requestIds }
                 val ctx = getApplication<Application>()
                 launch(Dispatchers.IO) {
                     val existing = KeywordQueueStore.load(ctx) ?: emptyList()
                     val newEntries = requests.map {
                         KeywordQueueStore.Entry(it.requestId, it.keyword, it.proxy, it.country)
                     }
-                    KeywordQueueStore.save(ctx, newEntries + existing)
+                    KeywordQueueStore.save(ctx, (newEntries + existing).distinctBy { it.requestId })
+                    refreshHistory()
                 }
                 requests.forEach { batchRequests[it.requestId] = it }
             }
@@ -105,6 +114,23 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             }
         }
         // Sequential processor — waits for each search to complete before starting the next
+        viewModelScope.launch {
+            SearchBridge.submitFailure.collect { failure ->
+                updateBatchStatus(failure.requestId, CheckStatus.ERROR, failure.message)
+                Log.w("TopSearch", "Submit failed reqId=${failure.requestId}: ${failure.message}")
+                delay(500)
+                if (pendingQueueCount == 0 && requestQueue.isEmpty && !SearchBridge.isProcessing.value) {
+                    retryErrorKeywords()
+                }
+            }
+        }
+        viewModelScope.launch {
+            SearchBridge.submitSuccess.collect { success ->
+                updateBatchStatus(success.requestId, CheckStatus.DONE)
+                _socketInfo.value = "Submit thành công"
+                Log.d("TopSearch", "Submit success reqId=${success.requestId}")
+            }
+        }
         viewModelScope.launch {
             for (req in requestQueue) {
                 pendingQueueCount = (pendingQueueCount - 1).coerceAtLeast(0)
@@ -156,14 +182,15 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
         // Trả kết quả cache ngay nếu đã check keyword này trước đó
         val cacheKey = cacheKey(kw, req.country)
-        val cachedResults = resultCache[cacheKey]
+        // Socket result must include a fresh screenshot, so do not submit cached ranks.
+        val cachedResults: List<SearchResult>? = null
         if (cachedResults != null) {
-            Log.d("TopSearch", "Cache HIT '$kw' country=${req.country} → ${cachedResults.size} results")
+            Log.d("TopSearch", "Cache HIT '$kw' country=${req.country} -> ${cachedResults.size} results")
             socketRequestId = null
             updateBatchStatus(req.requestId, CheckStatus.DONE)
             SearchBridge.dispatchResult(req.requestId, cachedResults, emptyList(), proxyIp, cachedResults.size)
             val suffix = if (pendingQueueCount > 0) " (còn $pendingQueueCount đang chờ)" else ""
-            _socketInfo.value = "[Cache] \"$kw\" → ${cachedResults.size} kết quả$suffix"
+            _socketInfo.value = "[Cache] \"$kw\" -> ${cachedResults.size} ket qua$suffix"
             _state.value = SearchState.Idle
             return
         }
@@ -194,7 +221,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             if (socketRequestId == req.requestId) socketRequestId = null
             updateBatchStatus(req.requestId, CheckStatus.ERROR, "Timeout khi search")
             _state.value = SearchState.Idle
-            val suffix = if (pendingQueueCount > 0) " — $pendingQueueCount keyword đang chờ" else ""
+            val suffix = if (pendingQueueCount > 0) " - $pendingQueueCount keyword dang cho" else ""
             _socketInfo.value = "Hết giờ: \"$kw\"$suffix"
         }
     }
@@ -210,6 +237,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         } else {
             ""
         }
+        var updatedItem: KeywordBatchItem? = null
         _keywordBatch.update { list ->
             list.map {
                 if (it.requestId == requestId) {
@@ -217,7 +245,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                         status = status,
                         errorMessage = if (status == CheckStatus.ERROR) errorMessage else "",
                         completedAt = completedAt,
-                    )
+                    ).also { updatedItem = it }
                 } else {
                     it
                 }
@@ -225,9 +253,67 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             val ctx = getApplication<Application>()
-            KeywordQueueStore.updateStatus(ctx, requestId, status)
-            if (_keywordBatch.value.all { it.status == CheckStatus.DONE }) {
-                KeywordQueueStore.clear(ctx)
+            val item = updatedItem
+            if (item != null) {
+                KeywordQueueStore.updateEntry(
+                    ctx = ctx,
+                    requestId = requestId,
+                    status = item.status,
+                    retryCount = item.retryCount,
+                    errorMessage = item.errorMessage,
+                    completedAt = item.completedAt,
+                )
+            } else {
+                KeywordQueueStore.updateStatus(ctx, requestId, status)
+            }
+            refreshHistory()
+        }
+    }
+
+    fun refreshHistory(reason: String = "refreshHistory") {
+        viewModelScope.launch(Dispatchers.IO) {
+            val entries = KeywordQueueStore.load(getApplication()) ?: emptyList()
+            Log.d("TopSearch", "History load [$reason]: total=${entries.size}")
+            entries.forEachIndexed { index, item ->
+                Log.d(
+                    "TopSearch",
+                    "  history[$index] reqId=${item.requestId} keyword='${item.keyword}' " +
+                        "status=${item.status} retry=${item.retryCount} country=${item.country} " +
+                        "queuedAt=${item.queuedAt} completedAt='${item.completedAt}' " +
+                        "error='${item.errorMessage}'",
+                )
+            }
+            _historyEntries.value = entries
+        }
+    }
+
+    fun openHistory() {
+        refreshHistory("open history")
+    }
+
+    fun deleteHistoryAll() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val before = KeywordQueueStore.load(getApplication())?.size ?: 0
+            Log.w("TopSearch", "History delete all: before=$before")
+            KeywordQueueStore.clear(getApplication())
+            _historyEntries.value = emptyList()
+            _keywordBatch.value = emptyList()
+        }
+    }
+
+    fun deleteHistoryDay(day: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val beforeEntries = KeywordQueueStore.load(getApplication()) ?: emptyList()
+            Log.w(
+                "TopSearch",
+                "History delete day=$day before=${beforeEntries.size} remove=${beforeEntries.count { it.queuedAt == day }}",
+            )
+            KeywordQueueStore.deleteDay(getApplication(), day)
+            _historyEntries.value = KeywordQueueStore.load(getApplication()) ?: emptyList()
+            _keywordBatch.update { items ->
+                items.filterNot { item ->
+                    _historyEntries.value.none { it.requestId == item.requestId }
+                }
             }
         }
     }
@@ -278,7 +364,6 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             resultCache[cacheKey(keyword, country)] = jsResults
             reqId?.let { _keywordResults.value = _keywordResults.value + (it to jsResults) }
             if (reqId != null) {
-                updateBatchStatus(reqId, CheckStatus.DONE)
                 SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp, jsResults.size)
                 showSocketDone(jsResults, keyword, firstPath, city, proxyIp, proxyFull, country)
             } else {
@@ -308,10 +393,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 }
                 if (reqId != null) {
                     if (results.isNotEmpty()) {
-                        updateBatchStatus(reqId, CheckStatus.DONE)
                         SearchBridge.dispatchResult(reqId, results, screenshotPaths, proxyIp, results.size)
                     } else {
-                        updateBatchStatus(reqId, CheckStatus.ERROR, "OCR không đọc được top")
+                        updateBatchStatus(reqId, CheckStatus.ERROR, "OCR khong doc duoc top")
                     }
                     showSocketDone(results, keyword, firstPath, city, proxyIp, proxyFull, country)
                 } else {
@@ -373,8 +457,8 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val ts   = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
         val lang = if (country == 2) "(th)" else "(vn)"
         val info = buildString {
-            appendLine("Thời gian: $ts")
-            appendLine("Từ khoá: $keyword - $lang")
+            appendLine("Thoi gian: $ts")
+            appendLine("Tu khoa: $keyword - $lang")
             if (proxyFull.isNotBlank()) {
                 val parts = proxyFull.split(":")
                 appendLine("Proxy: ${parts.getOrNull(0) ?: ""}:${parts.getOrNull(1) ?: ""}:${parts.getOrNull(2) ?: ""} - $country")
@@ -385,7 +469,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
         val queueEmpty = pendingQueueCount == 0 && requestQueue.isEmpty
         if (results.isNotEmpty()) {
-            _socketInfo.value = "Đã gửi ${results.size} kết quả"
+            _socketInfo.value = "Đã capture ${results.size} kết quả - đang submit"
             if (queueEmpty) {
                 _state.value = SearchState.Done(keyword, results, screenshotPath, city, proxyIp, info)
             }
@@ -407,7 +491,20 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     fun checkPendingQueue() {
         if (_pendingQueuePrompt.value || _keywordBatch.value.isNotEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
-            if (KeywordQueueStore.hasPending(getApplication())) {
+            val entries = KeywordQueueStore.load(getApplication()) ?: emptyList()
+            val unfinishedToday = entries.filter {
+                KeywordQueueStore.isToday(it) && it.status != CheckStatus.DONE
+            }
+            if (unfinishedToday.isNotEmpty()) {
+                Log.d("TopSearch", "Pending local unfinished keywords today=${unfinishedToday.size}")
+                unfinishedToday.forEachIndexed { index, item ->
+                    Log.d(
+                        "TopSearch",
+                        "  pending[$index] reqId=${item.requestId} keyword='${item.keyword}' " +
+                            "status=${item.status} retry=${item.retryCount} country=${item.country} " +
+                            "error='${item.errorMessage}' queuedAt=${item.queuedAt}",
+                    )
+                }
                 _pendingQueuePrompt.value = true
             }
         }
@@ -417,22 +514,58 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         _pendingQueuePrompt.value = false
         val ctx = getApplication<Application>()
         val entries = KeywordQueueStore.load(ctx) ?: return
-        val pending = entries.filter { it.status != CheckStatus.DONE }
-        _keywordBatch.value = entries.map {
+        val unfinishedToday = entries.filter {
+            KeywordQueueStore.isToday(it) && it.status != CheckStatus.DONE
+        }
+        val pending = unfinishedToday.filter { KeywordQueueStore.canResume(it) }
+        val pendingIds = pending.map { it.requestId }.toSet()
+        Log.d(
+            "TopSearch",
+            "Resume pending dialog: unfinishedToday=${unfinishedToday.size}, willResume=${pending.size}",
+        )
+        unfinishedToday.forEachIndexed { index, item ->
+            Log.d(
+                "TopSearch",
+                "  resume[$index] willResume=${item.requestId in pendingIds} " +
+                    "reqId=${item.requestId} keyword='${item.keyword}' status=${item.status} " +
+                    "retry=${item.retryCount} country=${item.country} error='${item.errorMessage}'",
+            )
+        }
+        _keywordBatch.value = unfinishedToday.map {
             KeywordBatchItem(
                 requestId = it.requestId,
                 keyword   = it.keyword,
-                status    = if (it.status == CheckStatus.DONE) CheckStatus.DONE else CheckStatus.PENDING,
+                status    = when {
+                    it.status == CheckStatus.DONE -> CheckStatus.DONE
+                    it.requestId in pendingIds -> CheckStatus.PENDING
+                    else -> CheckStatus.ERROR
+                },
+                retryCount = it.retryCount,
+                errorMessage = if (it.status == CheckStatus.ERROR && it.requestId !in pendingIds) it.errorMessage else "",
+                completedAt = if (it.status == CheckStatus.DONE || it.requestId !in pendingIds) it.completedAt else "",
             )
         }
-        entries.forEach { e ->
+        unfinishedToday.forEach { e ->
             batchRequests[e.requestId] = SearchBridge.SocketRequest(e.requestId, e.keyword, e.proxy, e.country)
         }
         viewModelScope.launch {
-            SearchBridge.resumeRequest.emit(
-                pending.map { SearchBridge.SocketRequest(it.requestId, it.keyword, it.proxy, it.country) }
-            )
-            Log.d("TopSearch", "Resumed ${pending.size}/${entries.size} keywords from persistent store")
+            withContext(Dispatchers.IO) {
+                pending.forEach {
+                    KeywordQueueStore.updateEntry(
+                        ctx = ctx,
+                        requestId = it.requestId,
+                        status = CheckStatus.PENDING,
+                        errorMessage = "",
+                        completedAt = "",
+                    )
+                }
+            }
+            if (pending.isNotEmpty()) {
+                SearchBridge.resumeRequest.emit(
+                    pending.map { SearchBridge.SocketRequest(it.requestId, it.keyword, it.proxy, it.country) }
+                )
+            }
+            Log.d("TopSearch", "Resumed ${pending.size}/${unfinishedToday.size} unfinished keywords from persistent store")
         }
     }
 
@@ -440,6 +573,8 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         _pendingQueuePrompt.value = false
         viewModelScope.launch(Dispatchers.IO) {
             KeywordQueueStore.clear(getApplication())
+            _historyEntries.value = emptyList()
+            _keywordBatch.value = emptyList()
         }
     }
 
@@ -448,6 +583,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             Log.w("TopSearch", "retryBatchKeyword: request not found reqId=$requestId")
             return
         }
+        var updatedItem: KeywordBatchItem? = null
         _keywordBatch.update { list ->
             list.map {
                 if (it.requestId == requestId) {
@@ -456,7 +592,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                         retryCount = it.retryCount + 1,
                         errorMessage = "",
                         completedAt = "",
-                    )
+                    ).also { updatedItem = it }
                 } else {
                     it
                 }
@@ -464,7 +600,20 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                KeywordQueueStore.updateStatus(getApplication(), requestId, CheckStatus.PENDING)
+                val item = updatedItem
+                if (item != null) {
+                    KeywordQueueStore.updateEntry(
+                        ctx = getApplication(),
+                        requestId = requestId,
+                        status = item.status,
+                        retryCount = item.retryCount,
+                        errorMessage = item.errorMessage,
+                        completedAt = item.completedAt,
+                    )
+                } else {
+                    KeywordQueueStore.updateStatus(getApplication(), requestId, CheckStatus.PENDING)
+                }
+                refreshHistory()
             }
             SearchBridge.resumeRequest.emit(listOf(req))
             Log.d("TopSearch", "Manual retry '${req.keyword}' reqId=$requestId")
@@ -478,6 +627,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val retryReqs = errorItems.mapNotNull { batchRequests[it.requestId] }
         if (retryReqs.isEmpty()) return
         Log.d("TopSearch", "Auto-retry ${retryReqs.size} retryable ERROR keywords")
+        val updatedItems = mutableMapOf<String, KeywordBatchItem>()
         errorItems.forEach { item ->
             _keywordBatch.update { list ->
                 list.map {
@@ -487,15 +637,28 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                             retryCount = it.retryCount + 1,
                             errorMessage = "",
                             completedAt = "",
-                        )
+                        ).also { updatedItems[item.requestId] = it }
                     else it
                 }
             }
         }
         withContext(Dispatchers.IO) {
             errorItems.forEach { item ->
-                KeywordQueueStore.updateStatus(getApplication(), item.requestId, CheckStatus.PENDING)
+                val updated = updatedItems[item.requestId]
+                if (updated != null) {
+                    KeywordQueueStore.updateEntry(
+                        ctx = getApplication(),
+                        requestId = item.requestId,
+                        status = updated.status,
+                        retryCount = updated.retryCount,
+                        errorMessage = updated.errorMessage,
+                        completedAt = updated.completedAt,
+                    )
+                } else {
+                    KeywordQueueStore.updateStatus(getApplication(), item.requestId, CheckStatus.PENDING)
+                }
             }
+            refreshHistory()
         }
         SearchBridge.resumeRequest.emit(retryReqs)
     }

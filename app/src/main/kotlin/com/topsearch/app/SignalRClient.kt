@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 private const val TAG = "SignalR"
 
-// ASCII 30 — SignalR JSON protocol message delimiter
+// ASCII 30 - SignalR JSON protocol message delimiter
 private const val RS = ''
 
 /**
@@ -30,7 +30,7 @@ class SignalRClient(
 ) {
     private val http = OkHttpClient.Builder()
         .pingInterval(20, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)  // no timeout — long-lived connection
+        .readTimeout(0, TimeUnit.MILLISECONDS)  // no timeout - long-lived connection
         .build()
 
     private var ws:            WebSocket? = null
@@ -47,7 +47,7 @@ class SignalRClient(
         imageUrls:  List<String> = emptyList(),
         publicIp:   String       = "",
         sourceName: String       = "",
-    ) {
+    ): Boolean {
         val top10 = items.take(10)
         val itemsArr = JSONArray()
         top10.forEach { r ->
@@ -73,11 +73,12 @@ class SignalRClient(
             put("arguments", JSONArray().apply { put(payload) })
         }.toString() + RS
 
-        Log.d(TAG, "▶ SUBMIT FRAME reqId=$requestId items=${top10.size} imageUrl=$imageUrl publicIp=$publicIp sourceName=$sourceName")
+        Log.d(TAG, "SUBMIT FRAME reqId=$requestId items=${top10.size} imageUrl=$imageUrl publicIp=$publicIp sourceName=$sourceName")
         top10.forEachIndexed { i, r -> Log.d(TAG, "  [${i+1}] rank=${r.rank} domain=${r.domain} url=${r.url}") }
         Log.d(TAG, "  RAW MSG = ${msg.take(400)}")
         val sent = ws?.send(msg) ?: false
-        Log.d(TAG, if (sent) "  ✓ ws.send OK" else "  ✗ ws.send FAILED (ws=${ws})")
+        Log.d(TAG, if (sent) "  ws.send OK" else "  ws.send FAILED (ws=${ws})")
+        return sent
     }
 
 
@@ -85,17 +86,17 @@ class SignalRClient(
         ws?.close(1000, "shutdown")
     }
 
-    // ── WebSocket listener ─────────────────────────────────────────────────────
+    // WebSocket listener
 
     private inner class Listener : WebSocketListener() {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            Log.d(TAG, "Connected → handshake")
+            Log.d(TAG, "Connected -> handshake")
             webSocket.send("""{"protocol":"json","version":1}$RS""")
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            Log.d(TAG, "← RAW: $text")
+            Log.d(TAG, "RAW: $text")
             text.split(RS).filter { it.isNotBlank() }.forEach(::handleFrame)
         }
 
@@ -112,7 +113,7 @@ class SignalRClient(
         }
     }
 
-    // ── Frame handling ─────────────────────────────────────────────────────────
+    // Frame handling
 
     private fun handleFrame(raw: String) {
         try {
@@ -120,7 +121,7 @@ class SignalRClient(
 
             if (!handshakeDone) {
                 handshakeDone = true
-                Log.d(TAG, "Handshake OK — server: $raw")
+                Log.d(TAG, "Handshake OK - server: $raw")
                 return
             }
 
@@ -128,7 +129,7 @@ class SignalRClient(
             Log.d(TAG, "Frame type=$type target=${json.optString("target")}")
             when (type) {
                 1 -> handleInvocation(json)
-                6 -> { Log.d(TAG, "Ping → pong"); ws?.send("""{"type":6}$RS""") }
+                6 -> { Log.d(TAG, "Ping -> pong"); ws?.send("""{"type":6}$RS""") }
                 else -> Log.d(TAG, "Unhandled frame: $raw")
             }
         } catch (e: Exception) {

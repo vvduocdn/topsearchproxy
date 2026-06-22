@@ -27,8 +27,6 @@ import com.topsearch.app.TelegramUploader
 private const val TAG        = "SearchService"
 private const val CHANNEL_ID = "topsearch_socket"
 private const val NOTIF_ID   = 1001
-private const val WS_URL     =
-    "wss://api.domainstatus.live/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u"
 
 class SearchService : Service() {
 
@@ -78,7 +76,7 @@ class SearchService : Service() {
         while (scope.isActive) {
             val gone = kotlinx.coroutines.CompletableDeferred<Unit>()
             val client = SignalRClient(
-                url            = WS_URL,
+                url            = BuildConfig.SOCKET_URL,
                 onKeyword      = ::onKeyword,
                 onBatch        = ::onBatch,
                 onDisconnected = { gone.complete(Unit) },
@@ -155,9 +153,12 @@ class SearchService : Service() {
             scope.launch {
                 Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount")
                 Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
-                if (results.isEmpty() && screenshotPaths.isEmpty()) {
-                    Log.w(TAG, "Skip empty submit reqId=$requestId keyword='${req.keyword}'")
-                    showNotif("Ket qua rong - bo qua submit")
+                if (screenshotPaths.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: thiếu ảnh")
+                    return@launch
+                }
+                if (results.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: thiếu top")
                     return@launch
                 }
                 screenshotPaths.forEachIndexed { i, p ->
@@ -180,6 +181,10 @@ class SearchService : Service() {
                         Log.w(TAG, "  upload[$i] FAILED path=$path")
                     }
                 }
+                if (imageUrls.isEmpty()) {
+                    failSubmit(requestId, req.keyword, "Submit fail: upload ảnh lỗi")
+                    return@launch
+                }
                 if (message.isNotBlank() && imageUrls.isNotEmpty()) {
                     Log.d(TAG, "TELEGRAM send text after image upload")
                     val sentText = TelegramUploader.sendMessage(message)
@@ -193,11 +198,21 @@ class SearchService : Service() {
                     Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
                 }
 
-                activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName)
-                    ?: Log.e(TAG, "activeClient is null - result not sent")
-                showNotif("Da gui ket qua - cho keyword tiep theo")
+                val sent = activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName) ?: false
+                if (sent) {
+                    SearchBridge.emitSubmitSuccess(requestId)
+                    showNotif("Da gui ket qua - cho keyword tiep theo")
+                } else {
+                    failSubmit(requestId, req.keyword, "Submit fail: socket send loi")
+                }
             }
         }
+    }
+
+    private suspend fun failSubmit(requestId: String, keyword: String, reason: String) {
+        Log.w(TAG, "$reason reqId=$requestId keyword='$keyword'")
+        SearchBridge.emitSubmitFailure(requestId, reason)
+        showNotif(reason)
     }
 
     private fun startMainActivity() {

@@ -14,6 +14,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+        manifestPlaceholders["usesCleartextTraffic"] = "false"
     }
 
     signingConfigs {
@@ -26,7 +27,22 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField(
+                "String",
+                "SOCKET_URL",
+                "\"wss://topsearch-signalr-test.onrender.com/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u\"",
+            )
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+        }
+
         release {
+            buildConfigField(
+                "String",
+                "SOCKET_URL",
+                "\"wss://api.domainstatus.live/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u\"",
+            )
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
@@ -43,6 +59,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
@@ -72,6 +89,11 @@ dependencies {
 
     // WebSocket (dùng cho SignalR client)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Unit test dependencies
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("org.json:json:20240303")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -21,6 +21,15 @@ object SearchBridge {
         val country:   Int,
     )
 
+    data class SubmitFailure(
+        val requestId: String,
+        val message:   String,
+    )
+
+    data class SubmitSuccess(
+        val requestId: String,
+    )
+
     /** Trạng thái kết nối WebSocket — Service cập nhật, UI observe */
     val isConnected = MutableStateFlow(false)
 
@@ -36,6 +45,12 @@ object SearchBridge {
     /** ViewModel → Service: re-queue pending keywords after app restart (crash recovery) */
     val resumeRequest = MutableSharedFlow<List<SocketRequest>>(extraBufferCapacity = 8)
 
+    /** Service → ViewModel: result is invalid for submit, mark keyword as failed */
+    val submitFailure = MutableSharedFlow<SubmitFailure>(extraBufferCapacity = 16)
+
+    /** Service → ViewModel: payload was sent, mark keyword as done */
+    val submitSuccess = MutableSharedFlow<SubmitSuccess>(extraBufferCapacity = 16)
+
     /** ViewModel → Service: search results ready (screenshotPaths empty if capture failed) */
     fun dispatchResult(
         requestId:     String,
@@ -50,6 +65,22 @@ object SearchBridge {
     /** Called by Service before emitting [incoming] */
     fun registerCallback(requestId: String, cb: (List<SearchResult>, List<String>, String, Int) -> Unit) {
         callbacks[requestId] = cb
+    }
+
+    fun dispatchSubmitFailure(requestId: String, message: String) {
+        submitFailure.tryEmit(SubmitFailure(requestId, message))
+    }
+
+    fun dispatchSubmitSuccess(requestId: String) {
+        submitSuccess.tryEmit(SubmitSuccess(requestId))
+    }
+
+    suspend fun emitSubmitFailure(requestId: String, message: String) {
+        submitFailure.emit(SubmitFailure(requestId, message))
+    }
+
+    suspend fun emitSubmitSuccess(requestId: String) {
+        submitSuccess.emit(SubmitSuccess(requestId))
     }
 
     private val callbacks = ConcurrentHashMap<String, (List<SearchResult>, List<String>, String, Int) -> Unit>()

@@ -11,6 +11,7 @@
         android:label="TopSearch"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
+        android:usesCleartextTraffic="${usesCleartextTraffic}"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
         android:theme="@style/AppTheme">
