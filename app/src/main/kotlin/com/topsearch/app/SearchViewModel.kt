@@ -337,7 +337,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     fun addTestKeyword(keyword: String, proxy: String = "", country: Int = 1) {
         val kw = keyword.trim().ifBlank { return }
         val requestId = "test_${System.currentTimeMillis()}"
-        val req = SearchBridge.SocketRequest(requestId, kw, proxy, country)
+        val req = SearchBridge.SocketRequest(requestId, kw, proxy, country, isTest = true)
         viewModelScope.launch {
             Log.d("TopSearch", "addTestKeyword: kw='$kw' proxy='$proxy' country=$country reqId=$requestId")
             SearchBridge.testRequest.emit(req)

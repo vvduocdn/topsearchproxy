@@ -19,6 +19,7 @@ object SearchBridge {
         val keyword:   String,
         val proxy:     String,
         val country:   Int,
+        val isTest:    Boolean = false,
     )
 
     data class SubmitFailure(

@@ -207,12 +207,18 @@ class SearchService : Service() {
                         Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
                     }
 
-                    val sent = activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName, checkedAt) ?: false
-                    if (sent) {
+                    if (req.isTest) {
+                        Log.d(TAG, "TEST keyword - skip socket submit, mark done")
                         SearchBridge.emitSubmitSuccess(requestId)
-                        showNotif("Da gui ket qua - cho keyword tiep theo")
+                        showNotif("Test done: ${req.keyword}")
                     } else {
-                        failSubmit(requestId, req.keyword, "Submit fail: socket send loi")
+                        val sent = activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName, checkedAt) ?: false
+                        if (sent) {
+                            SearchBridge.emitSubmitSuccess(requestId)
+                            showNotif("Da gui ket qua - cho keyword tiep theo")
+                        } else {
+                            failSubmit(requestId, req.keyword, "Submit fail: socket send loi")
+                        }
                     }
                 } ?: failSubmit(requestId, req.keyword, "Submit fail: timeout 90s")
             }
