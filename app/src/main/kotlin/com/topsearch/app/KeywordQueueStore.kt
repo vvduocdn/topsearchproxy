@@ -141,7 +141,8 @@ object KeywordQueueStore {
         if (e.status == CheckStatus.DONE) return false
         if (e.status != CheckStatus.ERROR) return true
         val msg = e.errorMessage.lowercase()
-        if ("proxy" in msg || "captcha" in msg || "block" in msg) return false
+        // proxy/captcha/block: vẫn cho resume nhưng tối đa 1 lần
+        if ("proxy" in msg || "captcha" in msg || "block" in msg) return e.retryCount < 1
         return e.retryCount < 3
     }
 
