@@ -1,5 +1,6 @@
 package com.topsearch.app
 
+import com.topsearch.app.BuildConfig
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager

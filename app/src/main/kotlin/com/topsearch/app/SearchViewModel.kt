@@ -137,7 +137,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             for (req in requestQueue) {
                 pendingQueueCount = (pendingQueueCount - 1).coerceAtLeast(0)
                 processSocketRequest(req)
-                // When queue drains, auto-retry any ERROR keywords (up to 3 times each)
+                // When queue drains, auto-retry ERROR keywords (normal: up to 3×; proxy/captcha/block: 1×)
                 if (pendingQueueCount == 0 && requestQueue.isEmpty) {
                     retryErrorKeywords()
                 }
@@ -666,7 +666,8 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
     private fun KeywordBatchItem.isAutoRetryableError(): Boolean {
         val msg = errorMessage.lowercase()
-        if ("proxy" in msg || "captcha" in msg || "block" in msg) return false
+        // proxy/captcha/block: vẫn retry nhưng tối đa 1 lần
+        if ("proxy" in msg || "captcha" in msg || "block" in msg) return retryCount < 1
         return true
     }
 

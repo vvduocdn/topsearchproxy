@@ -585,7 +585,8 @@ internal object GoogleSearchJs {
 
         function isKnowledgePanelResult(link) {
             if (!link || !link.closest) return false;
-           return !!link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel') ||
+            // [jscontroller="LhdR0e"] / .vtSz8d = Google video carousel section (không phải organic result)
+           return !!link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel, [jscontroller="LhdR0e"], .vtSz8d') ||
                 isLocalPanelResult(link);
         }
 
@@ -751,7 +752,8 @@ internal object GoogleSearchJs {
 
             try {
                 var u = new URL(realUrl);
-                var titleEl = block.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb, h1');
+                // YouTube organic result card luôn có h3; carousel item chỉ có [role="heading"] → bỏ qua
+                var titleEl = block.querySelector('h3, .LC20lb, .MBeuO, .F0FGWb');
                 var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
                 if (!title || title.length < 3 || title.length > 200) return;
 
@@ -862,6 +864,7 @@ internal object GoogleSearchJs {
 })()
 """.trimIndent()
 
+    /** Đọc thành phố Google đang phục vụ: ưu tiên location-chip → footer → local-pack header */
     val LOCATION_JS = """
 (function() {
     try {
@@ -896,6 +899,7 @@ internal object GoogleSearchJs {
 })()
 """.trimIndent()
 
+    /** Extract kết quả organic trong vùng CSS Y [minCssY, maxCssY] — lọc ads, dedup href */
     fun buildExtractVisibleResultsJs(minCssY: Int, maxCssY: Int): String = """
 (function() {
     try {
@@ -1102,10 +1106,7 @@ internal object GoogleSearchJs {
 })()
 """.trimIndent()
 
-    /**
-     * JS override navigator.geolocation — Google client sẽ thấy vị trí giả này.
-     * Inject cả onPageStarted lẫn onPageFinished để cover Google SPA re-render.
-     */
+    /** Điền keyword vào ô tìm kiếm và submit form */
     fun buildSearchJs(keyword: String): String {
         val escaped = keyword.replace("\\", "\\\\").replace("'", "\\'")
         return """
@@ -1120,6 +1121,7 @@ internal object GoogleSearchJs {
     """.trimIndent()
     }
 
+    /** Submit reCAPTCHA token: điền textarea → gọi data-callback → walk grecaptcha_cfg → submit form */
     fun buildCaptchaSubmitJs(token: String): String {
         val escaped = token.replace("'", "\\'")
         return """
@@ -1164,6 +1166,7 @@ internal object GoogleSearchJs {
     """.trimIndent()
     }
 
+    /** Override navigator.geolocation bằng vị trí giả (lat, lng) — inject cả onPageStarted lẫn onPageFinished */
     fun buildSpoofLocationJs(lat: Double, lng: Double) = """
 (function() {
     var _lat = $lat, _lng = $lng;

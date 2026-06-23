@@ -812,6 +812,29 @@ class JSExtractionLogicTest {
     private fun isExcludedSim(el: SimElem): Boolean =
         EXCLUDE_SELS.any { el.closest(it) != null }
 
+    /**
+     * Mirrors JS isKnowledgePanelResult() — subset of EXCLUDE used by addResult /
+     * addYouTubeVideoBlock / addHeadingResult. Bao gồm video carousel selectors mới.
+     */
+    private val KP_RESULT_SELS = listOf(
+        ".EyBRub", "[data-kpid]", "[data-maindata*=\"LOCAL_NAV\"]",
+        "g-scrolling-carousel",
+        "[jscontroller=\"LhdR0e\"]", ".vtSz8d",   // Google video carousel section
+    )
+
+    private fun isKnowledgePanelResultSim(el: SimElem): Boolean =
+        KP_RESULT_SELS.any { el.closest(it) != null }
+
+    /**
+     * Mirrors addYouTubeVideoBlock title check:
+     * block.querySelector('h3, .LC20lb, .MBeuO, .F0FGWb')
+     * [role="heading"] và h1 đã bị loại khỏi selector.
+     */
+    private val YT_TITLE_SELS = setOf("h3", ".LC20lb", ".MBeuO", ".F0FGWb")
+
+    private fun youTubeBlockHasValidTitle(availableSelectors: Set<String>): Boolean =
+        availableSelectors.any { it in YT_TITLE_SELS }
+
     // --- Knowledge Panel (EyBRub + data-kpid) ---
 
     @Test
@@ -949,29 +972,235 @@ class JSExtractionLogicTest {
         assertFalse(allowedUrl("https://maps.google.com/maps?q=78win"))
     }
 
-    // --- Full structure from case_78win_loi.txt ---
+    // --- Exact DOM from case_78win_loi.txt ---
 
     @Test
-    fun `all action links inside case_78win knowledge panel are excluded`() {
-        // Mirrors: MjjYud > EyBRub[data-kpid] > div[data-maindata*=LOCAL_NAV] > g-scrolling-carousel > a.P6Deab
-        val outer    = SimElem("div", classes = setOf("MjjYud", "VjDLd"))
-        val kpPanel  = SimElem("div",
-            classes = setOf("kp-wholepage", "EyBRub"),
-            attrs   = mapOf("data-kpid" to "/g/11m5jfy833"),
-            parent  = outer)
-        val navBlock = SimElem("div",
-            attrs  = mapOf("data-maindata" to """[null,"/g/11m5jfy833","78win",null,null,null,null,null,"LOCAL_NAV","vi-VN",null,133]"""),
-            parent = kpPanel)
-        val carousel = SimElem("g-scrolling-carousel", parent = navBlock)
+    fun `case_78win_loi — 78win productions excluded via EyBRub outer ancestor`() {
+        // Verified from case_78win_loi.txt (88136 bytes in):
+        //   div.liYKde
+        //     div.kp-wholepage.EyBRub   ← opened at pos 129, still open at link
+        //       ...
+        //       div.wDYxhc.NFQFxe[data-attrid="kc:/local:unified_actions"]
+        //         c-wiz.u1M3kd.ucRBdc
+        //           div.OYzgjc
+        //             div.zhZ3gf
+        //               div.bkaPDb[ssk="14:0_local_action"]
+        //                 a.n1obkb.mI8Pwc[href="http://78win.productions/"]
+        //
+        // Link class is "n1obkb mI8Pwc" — NOT P6Deab, NOT inside g-scrolling-carousel.
+        // Filter triggers via .EyBRub (outer KP wrapper).
 
-        val links = mapOf(
-            "http://78win.productions/"                    to SimElem("a", setOf("P6Deab"), mapOf("href" to "http://78win.productions/"), carousel),
-            "https://www.facebook.com/78Win.Official/"     to SimElem("a", emptySet(), mapOf("href" to "https://www.facebook.com/78Win.Official/"), carousel),
-            "https://www.youtube.com/@78Win_VN"            to SimElem("a", emptySet(), mapOf("href" to "https://www.youtube.com/@78Win_VN"), carousel),
+        val outer      = SimElem("div", classes = setOf("liYKde", "VjDLd"))
+        val kpOuter    = SimElem("div",
+            classes = setOf("kp-wholepage", "kp-wholepage-osrp", "EyBRub"),
+            parent  = outer)
+        // many intermediate divs — collapse to one for brevity
+        val intermediate = SimElem("div", parent = kpOuter)
+        val localSection = SimElem("div",
+            classes = setOf("wDYxhc", "NFQFxe"),
+            attrs   = mapOf("data-attrid" to "kc:/local:unified_actions"),
+            parent  = intermediate)
+        val cWiz       = SimElem("c-wiz", classes = setOf("u1M3kd", "ucRBdc"), parent = localSection)
+        val oyzgjc     = SimElem("div", classes = setOf("OYzgjc"), parent = cWiz)
+        val zhZ3gf     = SimElem("div", classes = setOf("zhZ3gf"), parent = oyzgjc)
+        val bkaPDb     = SimElem("div",
+            classes = setOf("bkaPDb"),
+            attrs   = mapOf("ssk" to "14:0_local_action"),
+            parent  = zhZ3gf)
+        val link       = SimElem("a",
+            classes = setOf("n1obkb", "mI8Pwc"),
+            attrs   = mapOf("href" to "http://78win.productions/"),
+            parent  = bkaPDb)
+
+        // Must be excluded (via .EyBRub outer ancestor)
+        assertTrue(isExcludedSim(link))
+        // But the URL itself is valid — EXCLUDE is the only blocker
+        assertTrue(allowedUrl("http://78win.productions/"))
+    }
+
+    @Test
+    fun `case_78win_loi — maps google place links rejected by allowedUrl`() {
+        // Other hrefs in the file: /maps/place/78win/... (relative) and google search
+        // These are also caught by allowedUrl for absolute URLs
+        assertFalse(allowedUrl("https://www.google.com/maps/place/78win/data=!4m2!3m1!1s0x0"))
+        assertFalse(allowedUrl("https://www.google.com/search?q=78win"))
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // Test: YouTube video carousel filtering (case4, case5)
+    // Source: case_example_domain_youtobe.com.txt — "case không hợp lệ"
+    // Fix 1: isKnowledgePanelResult thêm [jscontroller="LhdR0e"] / .vtSz8d
+    // Fix 2: addYouTubeVideoBlock bỏ [role="heading"] và h1 khỏi title selector
+    // ══════════════════════════════════════════════════════════════
+
+    // --- case5: div.vtSz8d[jscontroller="LhdR0e"] → carousel, must be excluded ---
+
+    @Test
+    fun `case5 — LhdR0e video carousel link excluded by isKnowledgePanelResult`() {
+        // case_example_domain_youtobe.com.txt (L23):
+        // div.vtSz8d.Ww4FFb.vt6azd[jscontroller="LhdR0e"]
+        //   a[data-curl="https://www.youtube.com/watch?v=PmN4O1ae5-w"]
+        //     span[role="heading" aria-level="3"]  <- khong co <h3>
+        val carousel = SimElem(
+            "div",
+            classes = setOf("vtSz8d", "Ww4FFb", "vt6azd"),
+            attrs   = mapOf("jscontroller" to "LhdR0e"),
+        )
+        val link = SimElem(
+            "a",
+            attrs  = mapOf("data-curl" to "https://www.youtube.com/watch?v=PmN4O1ae5-w"),
+            parent = carousel,
         )
 
-        links.forEach { (href, el) ->
-            assertTrue("Must be excluded: $href", isExcludedSim(el))
-        }
+        // Structural carousel check must exclude it
+        assertTrue(isKnowledgePanelResultSim(link))
+        // URL itself is valid — filter is structural, not URL-based
+        assertTrue(allowedUrl("https://www.youtube.com/watch?v=PmN4O1ae5-w"))
+        assertTrue(isYouTubeLikeUrl("https://www.youtube.com/watch?v=PmN4O1ae5-w"))
+    }
+
+    @Test
+    fun `case5 — vtSz8d class alone triggers carousel exclusion`() {
+        val block = SimElem("div", classes = setOf("vtSz8d"))
+        val link  = SimElem("a",
+            attrs  = mapOf("href" to "https://www.youtube.com/watch?v=PmN4O1ae5-w"),
+            parent = block,
+        )
+        assertTrue(isKnowledgePanelResultSim(link))
+    }
+
+    @Test
+    fun `case5 — jscontroller LhdR0e alone triggers carousel exclusion`() {
+        val block = SimElem("div", attrs = mapOf("jscontroller" to "LhdR0e"))
+        val link  = SimElem("a",
+            attrs  = mapOf("href" to "https://www.youtube.com/watch?v=PmN4O1ae5-w"),
+            parent = block,
+        )
+        assertTrue(isKnowledgePanelResultSim(link))
+    }
+
+    @Test
+    fun `case5 — deeply nested link inside LhdR0e carousel is still excluded`() {
+        // closest() walks up the full ancestor chain
+        val carousel = SimElem("div",
+            classes = setOf("vtSz8d"),
+            attrs   = mapOf("jscontroller" to "LhdR0e"),
+        )
+        val inner = SimElem("div", parent = carousel)
+        val link  = SimElem("a",
+            attrs  = mapOf("data-curl" to "https://www.youtube.com/watch?v=ANY"),
+            parent = inner,
+        )
+        assertTrue(isKnowledgePanelResultSim(link))
+        // URL is valid by itself — only structural filter blocks it
+        assertTrue(allowedUrl("https://www.youtube.com/watch?v=ANY"))
+    }
+
+    // --- case4: div[jscontroller="aD8OEe"] — no LhdR0e/vtSz8d, no h3 ---
+
+    @Test
+    fun `case4 — aD8OEe block not detected as carousel by isKnowledgePanelResult`() {
+        // jscontroller="aD8OEe" != LhdR0e, no vtSz8d class
+        // -> isKnowledgePanelResult cannot exclude it structurally
+        val block = SimElem("div", attrs = mapOf("jscontroller" to "aD8OEe"))
+        val link  = SimElem("a",
+            attrs  = mapOf("href" to "https://www.youtube.com/watch?v=XYZ"),
+            parent = block,
+        )
+        assertFalse(isKnowledgePanelResultSim(link))
+    }
+
+    @Test
+    fun `case4 — aD8OEe block skipped by addYouTubeVideoBlock because no h3 title`() {
+        // case_example_domain_youtobe.com.txt (L22): only has [role="heading"] span, no <h3>
+        // addYouTubeVideoBlock: querySelector('h3, .LC20lb, .MBeuO, .F0FGWb') -> null -> skip
+        assertFalse(youTubeBlockHasValidTitle(setOf("[role=\"heading\"]")))
+        assertFalse(youTubeBlockHasValidTitle(setOf("span", "div", "section")))
+        assertFalse(youTubeBlockHasValidTitle(emptySet()))
+    }
+
+    @Test
+    fun `title selector — role heading and h1 are no longer valid after fix`() {
+        // Fix removed [role="heading"] and h1 from addYouTubeVideoBlock title selector
+        // YouTube organic card always has h3; carousel items only have [role="heading"]
+        assertFalse(youTubeBlockHasValidTitle(setOf("[role=\"heading\"]")))
+        assertFalse(youTubeBlockHasValidTitle(setOf("h1")))
+    }
+
+    @Test
+    fun `title selector — h3 and class aliases are still valid`() {
+        assertTrue(youTubeBlockHasValidTitle(setOf("h3")))
+        assertTrue(youTubeBlockHasValidTitle(setOf(".LC20lb")))
+        assertTrue(youTubeBlockHasValidTitle(setOf(".MBeuO")))
+        assertTrue(youTubeBlockHasValidTitle(setOf(".F0FGWb")))
+        assertTrue(youTubeBlockHasValidTitle(setOf("h3", ".LC20lb")))
+    }
+
+    // --- valid case1 / case2: div.PmEWq.wHYlTd organic cards must pass ---
+
+    @Test
+    fun `valid case1 — organic YouTube card with h3 passes all checks`() {
+        // case_example_domain_youtobe.com.txt (L2):
+        // div.PmEWq.wHYlTd
+        //   div.WVV5ke[jscontroller="rTuANe"][data-curl="https://www.youtube.com/watch?v=VaEOLSP7_KU"]
+        //     h3 — tieu de hop le
+        val card  = SimElem("div", classes = setOf("PmEWq", "wHYlTd"))
+        val block = SimElem(
+            "div",
+            classes = setOf("WVV5ke"),
+            attrs   = mapOf(
+                "jscontroller" to "rTuANe",
+                "data-curl"    to "https://www.youtube.com/watch?v=VaEOLSP7_KU",
+            ),
+            parent = card,
+        )
+        val link = SimElem(
+            "a",
+            attrs  = mapOf("href" to "https://www.youtube.com/watch?v=VaEOLSP7_KU"),
+            parent = block,
+        )
+
+        assertFalse(isKnowledgePanelResultSim(link))              // khong phai carousel
+        assertTrue(youTubeBlockHasValidTitle(setOf("h3")))        // co h3 title
+        assertTrue(allowedUrl("https://www.youtube.com/watch?v=VaEOLSP7_KU"))
+        assertTrue(isYouTubeLikeUrl("https://www.youtube.com/watch?v=VaEOLSP7_KU"))
+    }
+
+    @Test
+    fun `valid case2 — organic YouTube card with h3 passes all checks`() {
+        // case_example_domain_youtobe.com.txt (L3):
+        // div.PmEWq.wHYlTd
+        //   div.WVV5ke[jscontroller="rTuANe"][data-curl="https://www.youtube.com/watch?v=0uyr4R3q-zc"]
+        val card  = SimElem("div", classes = setOf("PmEWq", "wHYlTd"))
+        val block = SimElem(
+            "div",
+            classes = setOf("WVV5ke"),
+            attrs   = mapOf(
+                "jscontroller" to "rTuANe",
+                "data-curl"    to "https://www.youtube.com/watch?v=0uyr4R3q-zc",
+            ),
+            parent = card,
+        )
+        val link = SimElem(
+            "a",
+            attrs  = mapOf("href" to "https://www.youtube.com/watch?v=0uyr4R3q-zc"),
+            parent = block,
+        )
+
+        assertFalse(isKnowledgePanelResultSim(link))
+        assertTrue(youTubeBlockHasValidTitle(setOf("h3")))
+        assertTrue(allowedUrl("https://www.youtube.com/watch?v=0uyr4R3q-zc"))
+        assertTrue(isYouTubeLikeUrl("https://www.youtube.com/watch?v=0uyr4R3q-zc"))
+    }
+
+    @Test
+    fun `rTuANe jscontroller is not a carousel — organic card passes`() {
+        // rTuANe = valid YouTube organic result card controller, khac LhdR0e
+        val block = SimElem("div", attrs = mapOf("jscontroller" to "rTuANe"))
+        val link  = SimElem("a",
+            attrs  = mapOf("href" to "https://www.youtube.com/watch?v=VaEOLSP7_KU"),
+            parent = block,
+        )
+        assertFalse(isKnowledgePanelResultSim(link))
     }
 }
