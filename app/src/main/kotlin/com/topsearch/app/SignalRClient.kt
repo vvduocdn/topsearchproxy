@@ -170,7 +170,6 @@ class SignalRClient(
         val keyword   = payload.optString("keyword")
         val proxy     = payload.optString("proxy")
         val country   = payload.optInt("country", 1)
-        if (keyword.isBlank() || requestId.isBlank()) return
         onBatch(listOf(SearchBridge.SocketRequest(requestId, keyword, proxy, country)))
     }
 }
