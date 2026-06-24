@@ -427,6 +427,81 @@ internal object GoogleSearchJs {
 })()
 """.trimIndent()
 
+    /**
+     * Debug JS: chạy toàn bộ filter logic trên mọi a.zReHs / a[jsname="UWckNb"] và
+     * mọi link đến domain bất kỳ chứa "pitt.edu".
+     * Trả về JSON string để log vào Logcat — gọi ngay sau EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS.
+     * Dùng để debug runtime, không gọi trong production. Logic được lưu ở README.md §9.
+     */
+    val DUMP_ZREHS_DEBUG_JS = """
+(function() {
+    try {
+        var out = [];
+
+        function anc(link) {
+            var chain = []; var cur = link.parentElement; var d = 0;
+            while (cur && d < 10) {
+                var t = (cur.tagName || cur.nodeName || '').toLowerCase();
+                var c = (cur.className || '').split(' ')[0].substring(0, 30);
+                var jsc = cur.getAttribute('jscontroller') || '';
+                chain.push(t + (c ? '.' + c : '') + (jsc ? '[jsc=' + jsc.substring(0,8) + ']' : ''));
+                cur = cur.parentElement; d++;
+            }
+            return chain.join(' > ');
+        }
+
+        function diagnose(link) {
+            var href  = link.getAttribute('href') || '';
+            var hasH3 = !!(link.querySelector && link.querySelector('h3'));
+            var cls   = (link.className || '').substring(0, 40);
+            var jsn   = link.getAttribute('jsname') || '';
+
+            var inULS  = !!(link.closest && link.closest('.ULSxyf'));
+            var inIur  = !!(link.closest && link.closest('#iur, [data-iu], [data-viewer-group]'));
+            var inGSec = !!(link.closest && link.closest('g-section-with-header'));
+            var inLhd  = !!(link.closest && link.closest('[jscontroller="LhdR0e"], .vtSz8d'));
+            var inEyB  = !!(link.closest && link.closest('.EyBRub, [data-kpid]'));
+            var inScr  = !!(link.closest && link.closest('g-scrolling-carousel'));
+
+            var imagePack = inULS || inIur;
+            var kp = false;
+            if (inEyB || inScr) kp = true;
+            if (!kp && inGSec && !hasH3) kp = true;
+            if (!kp && inLhd  && !hasH3) kp = true;
+
+            var reason = imagePack ? ('IMG_PACK(' + (inULS?'ULSxyf':'') + (inIur?'+data-iu':'') + ')') :
+                         kp        ? ('KP(' + (inEyB?'EyBRub':inScr?'carousel':inGSec?'g-section':inLhd?'LhdR0e':'?') + ')') :
+                                     'PASS';
+
+            return 'href=' + href.substring(0, 100) + '\n' +
+                   '  cls=' + cls + ' jsname=' + jsn + '\n' +
+                   '  hasH3=' + hasH3 + ' ULS=' + inULS + ' gSec=' + inGSec +
+                   ' LhdR0e=' + inLhd + ' EyBRub=' + inEyB + '\n' +
+                   '  RESULT=' + reason + '\n' +
+                   '  ancestors: ' + anc(link);
+        }
+
+        // 1. Tất cả a.zReHs / a[jsname="UWckNb"]
+        var organics = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href]');
+        out.push('=== organic direct links (a.zReHs / UWckNb): ' + organics.length + ' ===');
+        for (var i = 0; i < organics.length; i++) {
+            out.push('[' + i + '] ' + diagnose(organics[i]));
+        }
+
+        // 2. Tất cả link có href chứa "pitt.edu"
+        var pittAll = document.querySelectorAll('a[href*="pitt.edu"]');
+        out.push('=== pitt.edu links total: ' + pittAll.length + ' ===');
+        for (var p = 0; p < pittAll.length; p++) {
+            out.push('[pitt' + p + '] ' + diagnose(pittAll[p]));
+        }
+
+        return JSON.stringify(out.join('\n'));
+    } catch(e) {
+        return JSON.stringify('ZREHS_DEBUG ERROR: ' + e.message);
+    }
+})()
+""".trimIndent()
+
     /** JS lấy vị trí Google đang phục vụ kết quả — trả raw text, không filter cứng */
     // Extract top theo DOM đã render: ưu tiên heading, fallback link-card, sort theo vị trí Y trên ảnh.
     val EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS = """
@@ -585,9 +660,23 @@ internal object GoogleSearchJs {
 
         function isKnowledgePanelResult(link) {
             if (!link || !link.closest) return false;
-            // [jscontroller="LhdR0e"] / .vtSz8d = Google video carousel section (không phải organic result)
-           return !!link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel, [jscontroller="LhdR0e"], .vtSz8d') ||
-                isLocalPanelResult(link);
+            // Standard Knowledge Panel / non-organic selectors — always exclude.
+            if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel') ||
+                isLocalPanelResult(link)) return true;
+            // g-section-with-header wraps news sections (links have NO <h3>) AND
+            // sometimes wraps organic video result sections (links ALWAYS have <h3>).
+            // Skip the exclusion when the link itself contains an <h3> (organic video card).
+            if (link.closest('g-section-with-header')) {
+                if (!link.querySelector || !link.querySelector('h3')) return true;
+            }
+            // [jscontroller="LhdR0e"] / .vtSz8d = Google video carousel section.
+            // Exception: organic direct result cards always have <h3> inside the link;
+            // carousel items only use [role="heading"] span — never <h3>.
+            // Skip the carousel ancestor check when the link itself contains an h3.
+            if (!link.querySelector || !link.querySelector('h3')) {
+                if (link.closest('[jscontroller="LhdR0e"], .vtSz8d')) return true;
+            }
+            return false;
         }
 
         function isLocalPanelResult(el) {
@@ -662,7 +751,12 @@ internal object GoogleSearchJs {
         }
 
         function isOrganicDirectLink(link) {
-            return !!(link && link.matches && link.matches('a.zReHs[href], a[jsname="UWckNb"][href]'));
+            // a.zReHs / a[jsname="UWckNb"] — classic mobile organic result link.
+            // a.OcpZAb — observed 2026-06: Google replaced zReHs with OcpZAb on video result cards
+            //            (e.g. chs.pitt.edu). No jsname attribute; class is the only stable signal.
+            return !!(link && link.matches && link.matches(
+                'a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href]'
+            ));
         }
 
         function titleFromOrganicDirectLink(link, domain) {
@@ -817,7 +911,7 @@ internal object GoogleSearchJs {
 
         // Modern/mobile organic cards can use direct zReHs/UWckNb links instead of /url?q=.
         // Nimo-related domains may appear as direct media/result links, so keep them in this pass too.
-        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"], a[href*="facebook.com/"]');
+        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href], a[href*="nimo"], a[href*="facebook.com/"]');
         for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
             if (!isOrganicDirectLink(organicDirectLinks[o]) &&
                 !isNimoLikeLink(organicDirectLinks[o]) &&

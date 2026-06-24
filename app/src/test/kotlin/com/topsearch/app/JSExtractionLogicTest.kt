@@ -803,6 +803,8 @@ class JSExtractionLogicTest {
         ".mnr-c", ".commercial-unit-desktop-top", ".cu-container",
         ".EyBRub", "[data-kpid]",
         "g-scrolling-carousel",
+        ".ULSxyf",
+        "g-section-with-header",
         "[data-maindata*=\"LOCAL_NAV\"]",
         ".P6Deab",
         "[data-phone-number]",
@@ -812,18 +814,55 @@ class JSExtractionLogicTest {
     private fun isExcludedSim(el: SimElem): Boolean =
         EXCLUDE_SELS.any { el.closest(it) != null }
 
+    /** Mirrors JS isImagePackResult() — used in Script 3 (EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS) */
+    private val IMAGE_PACK_SELS = listOf(".ULSxyf", "#iur", "[data-iu]", "[data-viewer-group]")
+    private fun isImagePackResultSim(el: SimElem): Boolean =
+        IMAGE_PACK_SELS.any { el.closest(it) != null }
+
     /**
-     * Mirrors JS isKnowledgePanelResult() — subset of EXCLUDE used by addResult /
-     * addYouTubeVideoBlock / addHeadingResult. Bao gồm video carousel selectors mới.
+     * Mirrors JS isKnowledgePanelResult().
+     *
+     * Standard KP selectors always apply.
+     * Video carousel selectors ([jscontroller="LhdR0e"] / .vtSz8d) are skipped when
+     * [elementHasH3 = true] — organic result cards always have <h3> inside the link;
+     * carousel items only use [role="heading"] span, never <h3>.
      */
-    private val KP_RESULT_SELS = listOf(
+    private val KP_STANDARD_SELS = listOf(
         ".EyBRub", "[data-kpid]", "[data-maindata*=\"LOCAL_NAV\"]",
         "g-scrolling-carousel",
+        // g-section-with-header moved to h3-guarded check below (see isKnowledgePanelResultSim)
+    )
+    private val KP_CAROUSEL_SELS = listOf(
         "[jscontroller=\"LhdR0e\"]", ".vtSz8d",   // Google video carousel section
     )
 
-    private fun isKnowledgePanelResultSim(el: SimElem): Boolean =
-        KP_RESULT_SELS.any { el.closest(it) != null }
+    /**
+     * Mirrors JS isKnowledgePanelResult().
+     *
+     * Standard KP selectors always apply.
+     * g-section-with-header: filters news links (no h3) but allows organic video cards (with h3).
+     * Video carousel selectors ([jscontroller="LhdR0e"] / .vtSz8d) are skipped when
+     * [elementHasH3 = true] — organic result cards always have <h3> inside the link;
+     * carousel items only use [role="heading"] span, never <h3>.
+     */
+    private fun isKnowledgePanelResultSim(el: SimElem, elementHasH3: Boolean = false): Boolean {
+        if (KP_STANDARD_SELS.any { el.closest(it) != null }) return true
+        // g-section-with-header: news links have NO h3; organic video cards ALWAYS have h3
+        if (el.closest("g-section-with-header") != null && !elementHasH3) return true
+        // Carousel check: skip if element has h3 inside (organic video result card)
+        if (!elementHasH3 && KP_CAROUSEL_SELS.any { el.closest(it) != null }) return true
+        return false
+    }
+
+    /**
+     * Mirrors JS isOrganicDirectLink():
+     *   link.matches('a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href]')
+     * Simplified to class/attr checks (SimElem has no compound-selector support).
+     */
+    private fun isOrganicDirectLinkSim(el: SimElem): Boolean =
+        "zReHs"  in el.classes ||
+        el.attrs["jsname"] == "UWckNb" ||
+        "OcpZAb" in el.classes
 
     /**
      * Mirrors addYouTubeVideoBlock title check:
@@ -1202,5 +1241,270 @@ class JSExtractionLogicTest {
             parent = block,
         )
         assertFalse(isKnowledgePanelResultSim(link))
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // Tests: case_top_domain_valided.txt — case1
+    // Organic video result card (chs.pitt.edu) inside LhdR0e section.
+    // Fix: isKnowledgePanelResult skips carousel check when link has <h3>.
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    fun `case_top_domain_valided case1 — organic video card with h3 inside LhdR0e section NOT filtered`() {
+        // case_top_domain_valided.txt (casa1):
+        // div.vtSz8d.Ww4FFb.vt6azd[jscontroller="LhdR0e"]  <-- video section wrapper
+        //   div.MjjYud
+        //     div.A6K0A[data-rpos="0"]
+        //       div.PmEWq.wHYlTd.Ww4FFb.vt6azd[jsname="pKB8Bc"][data-hveid="CA4QAA"]
+        //         a.zReHs[jsname="UWckNb"][href="https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"]
+        //           h3.LC20lb.MBeuO  <-- h3 IS INSIDE the link (organic card)
+        //
+        // Fix: link.querySelector('h3') is non-null → carousel check skipped → NOT filtered.
+        val videoSection = SimElem(
+            "div",
+            classes = setOf("vtSz8d", "Ww4FFb", "vt6azd"),
+            attrs   = mapOf("jscontroller" to "LhdR0e"),
+        )
+        val mjjYud = SimElem("div", classes = setOf("MjjYud"), parent = videoSection)
+        val card   = SimElem(
+            "div",
+            classes = setOf("PmEWq", "wHYlTd", "Ww4FFb", "vt6azd"),
+            attrs   = mapOf("jsname" to "pKB8Bc", "data-hveid" to "CA4QAA"),
+            parent  = mjjYud,
+        )
+        val link = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs   = mapOf(
+                "jsname" to "UWckNb",
+                "href"   to "https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e",
+            ),
+            parent = card,
+        )
+
+        // Link has h3 inside → carousel check bypassed → NOT a KP result
+        assertFalse(isKnowledgePanelResultSim(link, elementHasH3 = true))
+        // Not excluded by EXCLUDE array (no g-section-with-header, EyBRub, etc.)
+        assertFalse(isExcludedSim(link))
+        // URL is valid and allowed
+        assertTrue(allowedUrl("https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"))
+    }
+
+    @Test
+    fun `case_top_domain_valided case1 — YouTube carousel link WITHOUT h3 inside LhdR0e STILL filtered`() {
+        // Confirms existing case5 behavior is preserved:
+        // carousel items inside LhdR0e do NOT have <h3> → carousel check applies → filtered.
+        val videoSection = SimElem(
+            "div",
+            classes = setOf("vtSz8d", "Ww4FFb", "vt6azd"),
+            attrs   = mapOf("jscontroller" to "LhdR0e"),
+        )
+        val link = SimElem(
+            "a",
+            attrs  = mapOf("data-curl" to "https://www.youtube.com/watch?v=PmN4O1ae5-w"),
+            parent = videoSection,
+        )
+
+        // No h3 inside link → carousel check applies → IS a KP result → filtered
+        assertTrue(isKnowledgePanelResultSim(link, elementHasH3 = false))
+        // Default (false) also filters
+        assertTrue(isKnowledgePanelResultSim(link))
+    }
+
+    @Test
+    fun `case_top_domain_valided case1 — vtSz8d link WITHOUT h3 still filtered via vtSz8d selector`() {
+        // A link directly inside .vtSz8d (without jscontroller) and without h3 is still blocked.
+        val videoSection = SimElem("div", classes = setOf("vtSz8d"))
+        val link = SimElem(
+            "a",
+            attrs  = mapOf("href" to "https://www.youtube.com/watch?v=abc123"),
+            parent = videoSection,
+        )
+
+        assertTrue(isKnowledgePanelResultSim(link, elementHasH3 = false))
+    }
+
+    @Test
+    fun `case_top_domain_valided case1 — chs pitt edu URL is valid and not an ad`() {
+        assertTrue(allowedUrl("https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"))
+        assertFalse(isAdUrl("https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"))
+        assertEquals("chs.pitt.edu", getDomain("https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"))
+    }
+
+
+    // ══════════════════════════════════════════════════════════════
+    // Tests: case_top_domain_valid.txt — chs.pitt.edu organic video card
+    // inside g-section-with-header (Google "Videos" section).
+    //
+    // Root cause: g-section-with-header was added to EXCLUDE / isKnowledgePanelResult
+    // to block news section (Top Stories) links. However it can also wrap legitimate
+    // organic video result cards. The fix: apply the same <h3> guard used for
+    // [jscontroller="LhdR0e"] — news links have NO <h3>; organic video cards DO.
+    //
+    // Script 3 (only script used at runtime) uses isKnowledgePanelResult, not isExcluded.
+    // Scripts 1/2/4 still filter via EXCLUDE_SELS (g-section-with-header present there).
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    fun `case_top_domain_valid — organic video card WITH h3 inside g-section-with-header NOT filtered by isKnowledgePanelResult`() {
+        // Actual structure in the SERP (case_top_domain_valid.txt, dom from div.MjjYud down):
+        // g-section-with-header  <-- Google "Videos" / "Tin bai video" section wrapper
+        //   div.MjjYud
+        //     div.A6K0A[data-rpos="0"]
+        //       div.PmEWq.wHYlTd.Ww4FFb.vt6azd[jsname="pKB8Bc"][data-hveid="CA4QAA"]
+        //         a.zReHs[jsname="UWckNb"][href="https://www.chs.pitt.edu/video?..."]
+        //           h3.LC20lb.MBeuO  <-- h3 IS INSIDE the link (organic card)
+        //
+        // Fix: link.querySelector('h3') is non-null → g-section-with-header check skipped
+        //      → isKnowledgePanelResult returns false → NOT filtered in Script 3.
+        val videoSection = SimElem("g-section-with-header", classes = setOf("yG4QQe"))
+        val mjjYud = SimElem("div", classes = setOf("MjjYud"), parent = videoSection)
+        val a6K0A  = SimElem("div", classes = setOf("A6K0A"),
+                             attrs = mapOf("data-rpos" to "0"), parent = mjjYud)
+        val card   = SimElem(
+            "div",
+            classes = setOf("PmEWq", "wHYlTd", "Ww4FFb", "vt6azd"),
+            attrs   = mapOf("jsname" to "pKB8Bc", "data-hveid" to "CA4QAA"),
+            parent  = a6K0A,
+        )
+        val link = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs   = mapOf(
+                "jsname" to "UWckNb",
+                "href"   to "https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e",
+            ),
+            parent = card,
+        )
+
+        // Script 3 — isImagePackResult: no ULSxyf/data-iu → NOT filtered (valid case passes this)
+        assertFalse(isImagePackResultSim(link))
+        // Script 3 — isKnowledgePanelResult: link has h3 → g-section-with-header check bypassed → NOT filtered
+        assertFalse(isKnowledgePanelResultSim(link, elementHasH3 = true))
+        // Scripts 2 & 4 — isExcluded: g-section-with-header still in EXCLUDE_SELS (not used at runtime)
+        assertTrue(isExcludedSim(link))
+        // URL is valid
+        assertTrue(allowedUrl("https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"))
+    }
+
+    @Test
+    fun `case_top_domain_valid — news link WITHOUT h3 inside g-section-with-header still filtered`() {
+        // Confirms that news article links (no h3) inside g-section-with-header are still blocked.
+        // e.g. WlydOe / plain anchor links from "Tin bài hàng đầu" section
+        val section = SimElem("g-section-with-header", classes = setOf("yG4QQe", "TBC9ub"))
+        val link    = SimElem(
+            "a",
+            attrs  = mapOf("href" to "https://laodong.vn/article"),
+            parent = section,
+        )
+
+        // No h3 → check triggers → IS a KP result → filtered
+        assertTrue(isKnowledgePanelResultSim(link, elementHasH3 = false))
+        assertTrue(isKnowledgePanelResultSim(link))   // default (false) also filters
+    }
+
+    @Test
+    fun `case_top_domain_valid — organic video card directly in MjjYud (no section wrapper) passes all filters`() {
+        // Case where video card has no g-section-with-header ancestor at all —
+        // should pass through both isKnowledgePanelResult and isExcluded.
+        val mjjYud = SimElem("div", classes = setOf("MjjYud"))
+        val a6K0A  = SimElem("div", classes = setOf("A6K0A"),
+                             attrs = mapOf("data-rpos" to "0"), parent = mjjYud)
+        val card   = SimElem(
+            "div",
+            classes = setOf("PmEWq", "wHYlTd", "Ww4FFb", "vt6azd"),
+            attrs   = mapOf("jsname" to "pKB8Bc", "data-hveid" to "CA4QAA"),
+            parent  = a6K0A,
+        )
+        val link = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs   = mapOf(
+                "jsname" to "UWckNb",
+                "href"   to "https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e",
+            ),
+            parent = card,
+        )
+
+        // Script 3 — isImagePackResult: no ULSxyf/data-iu → NOT filtered
+        assertFalse(isImagePackResultSim(link))
+        // Script 3 — isKnowledgePanelResult: no g-section-with-header, no LhdR0e → NOT filtered (with or without h3)
+        assertFalse(isKnowledgePanelResultSim(link, elementHasH3 = true))
+        assertFalse(isKnowledgePanelResultSim(link, elementHasH3 = false))
+        // Scripts 2 & 4 — isExcluded: no excluded ancestor → NOT excluded
+        assertFalse(isExcludedSim(link))
+        // URL is valid → CAPTURED
+        assertTrue(allowedUrl("https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"))
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // Tests: a.OcpZAb — new organic link class observed 2026-06
+    // Google replaced a.zReHs[jsname="UWckNb"] with a.cz3goc.OcpZAb on video cards.
+    // Logcat ZREHS_DIAG confirmed: a.zReHs count=0, pitt.edu link cls="cz3goc OcpZAb".
+    // ancestors: div.T61Aje > div.Ww4FFb > div > div.MjjYud > div.rso
+    // hasH3=false (h3 is sibling inside card, not inside link itself).
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    fun `OcpZAb — new Google organic link class passes all Script 3 filters`() {
+        // Exact runtime structure from ZREHS_DIAG log (2026-06-24):
+        // div.rso > div.MjjYud > div > div.Ww4FFb > div.T61Aje
+        //   > a.cz3goc.OcpZAb[href="https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"]
+        //     (hasH3=false — h3 is in sibling, titleFromOrganicDirectLink finds it via card)
+        val rso     = SimElem("div", classes = setOf("rso"))
+        val mjjYud  = SimElem("div", classes = setOf("MjjYud"), parent = rso)
+        val ww4FFb  = SimElem("div", classes = setOf("Ww4FFb"), parent = mjjYud)
+        val t61Aje  = SimElem("div", classes = setOf("T61Aje"), parent = ww4FFb)
+        val link    = SimElem(
+            "a",
+            classes = setOf("cz3goc", "OcpZAb"),
+            attrs   = mapOf("href" to "https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"),
+            parent  = t61Aje,
+        )
+
+        // isOrganicDirectLink: OcpZAb class → TRUE → addResult called
+        assertTrue(isOrganicDirectLinkSim(link))
+        // Script 3 — isImagePackResult: no ULSxyf/data-iu in ancestor → NOT filtered
+        assertFalse(isImagePackResultSim(link))
+        // Script 3 — isKnowledgePanelResult: no g-section, no LhdR0e → NOT filtered
+        assertFalse(isKnowledgePanelResultSim(link))
+        // Scripts 2 & 4 — isExcluded: no excluded ancestor
+        assertFalse(isExcludedSim(link))
+        // URL is valid → CAPTURED
+        assertTrue(allowedUrl("https://www.chs.pitt.edu/video?watch=9JIUGG0Wf8e"))
+    }
+
+    @Test
+    fun `OcpZAb — link inside ULSxyf is still filtered by isImagePackResult`() {
+        // Even though OcpZAb is now a valid organic link class,
+        // if it ends up inside a ULSxyf bloc it must still be filtered.
+        val ulsxyf = SimElem("div", classes = setOf("ULSxyf"))
+        val link   = SimElem(
+            "a",
+            classes = setOf("OcpZAb"),
+            attrs   = mapOf("href" to "https://example.com/"),
+            parent  = ulsxyf,
+        )
+
+        assertTrue(isOrganicDirectLinkSim(link))   // isOrganicDirectLink still true
+        assertTrue(isImagePackResultSim(link))      // but isImagePackResult blocks it first
+    }
+
+    @Test
+    fun `isOrganicDirectLink — recognises zReHs, UWckNb and OcpZAb, not rIRoqf`() {
+        fun makeLink(cls: Set<String>, jsname: String = "") = SimElem(
+            "a", classes = cls,
+            attrs = buildMap { if (jsname.isNotEmpty()) put("jsname", jsname); put("href", "https://x.com/") }
+        )
+
+        assertTrue(isOrganicDirectLinkSim(makeLink(setOf("zReHs"))))
+        assertTrue(isOrganicDirectLinkSim(makeLink(setOf("zReHs", "OcpZAb"))))
+        assertTrue(isOrganicDirectLinkSim(makeLink(emptySet(), jsname = "UWckNb")))
+        assertTrue(isOrganicDirectLinkSim(makeLink(setOf("OcpZAb"))))
+        assertTrue(isOrganicDirectLinkSim(makeLink(setOf("cz3goc", "OcpZAb"))))  // exact runtime class
+        // rIRoqf (thumbnail) and WlydOe (news) are NOT organic direct links
+        assertFalse(isOrganicDirectLinkSim(makeLink(setOf("rIRoqf"))))
+        assertFalse(isOrganicDirectLinkSim(makeLink(setOf("WlydOe"))))
+        assertFalse(isOrganicDirectLinkSim(makeLink(setOf("ddkIM"))))
     }
 }
