@@ -669,14 +669,28 @@ internal object GoogleSearchJs {
 
         function isKnowledgePanelResult(link) {
             if (!link || !link.closest) return false;
-            if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel, [jscontroller="LhdR0e"], .vtSz8d'))
-                return true;
+            // Standard Knowledge Panel / non-organic selectors — always exclude.
+            if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel') ||
+                isLocalPanelResult(link)) return true;
             // Top Stories / Tin bài hàng đầu block — jsname="Yccn4d" là ID nội bộ của Google cho section này
             if (link.closest('[jsname="Yccn4d"]')) return true;
             // App Install widget (Google gợi ý cài app) — jsname="tJHJj" container, .qs-ic card
             if (link.closest('[jsname="tJHJj"], .qs-ic')) return true;
             if (link.id && link.id.startsWith('aig-ni-')) return true;
-            return isLocalPanelResult(link);
+            // g-section-with-header wraps news sections (links have NO <h3>) AND
+            // sometimes wraps organic video result sections (links ALWAYS have <h3>).
+            // Skip the exclusion when the link itself contains an <h3> (organic video card).
+            if (link.closest('g-section-with-header')) {
+                if (!link.querySelector || !link.querySelector('h3')) return true;
+            }
+            // [jscontroller="LhdR0e"] / .vtSz8d = Google video carousel section.
+            // Exception: organic direct result cards always have <h3> inside the link;
+            // carousel items only use [role="heading"] span — never <h3>.
+            // Skip the carousel ancestor check when the link itself contains an h3.
+            if (!link.querySelector || !link.querySelector('h3')) {
+                if (link.closest('[jscontroller="LhdR0e"], .vtSz8d')) return true;
+            }
+            return false;
         }
 
         function isLocalPanelResult(el) {
