@@ -326,6 +326,8 @@ fun WebCaptureScreen(
 
                     webViewClient = object : WebViewClient() {
                         private var done = false
+                        private var transientRetryCount = 0
+                        private var homepageLoopCount = 0
 
                         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                             Log.d(TAG, "onPageStarted url=$url")
@@ -354,7 +356,13 @@ fun WebCaptureScreen(
                             }
                             if (keyword.isNotBlank() && !url.contains("/search")) {
                                 // Phase 1: homepage loaded → inject keyword and submit
-                                Log.d(TAG, "Phase 1 → homepage detected, inject keyword='$keyword'")
+                                homepageLoopCount++
+                                if (homepageLoopCount > 4) {
+                                    Log.w(TAG, "Homepage redirect loop detected ($homepageLoopCount times) — proxy issue")
+                                    onError("Proxy lỗi — thử lại để đổi proxy khác")
+                                    return
+                                }
+                                Log.d(TAG, "Phase 1 → homepage detected (#$homepageLoopCount), inject keyword='$keyword'")
                                 view.evaluateJavascript(GoogleSearchJs.buildSearchJs(keyword)) { result ->
                                     Log.d(TAG, "Phase 1 inject result=$result")
                                 }
@@ -370,14 +378,30 @@ fun WebCaptureScreen(
                             view: WebView, req: WebResourceRequest, err: WebResourceError,
                         ) {
                             if (!req.isForMainFrame) return
-                            if (localProxy != null && !proxyFallback) {
-                                // Proxy có auth nhưng fail → báo lỗi rõ, không fallback về IP thật
-                                // (fallback sẽ cho kết quả sai tỉnh vì IP máy ở HCM)
+                            val desc = err.description ?: ""
+                            val isProxyError = localProxy != null && !proxyFallback &&
+                                (desc.contains("PROXY", ignoreCase = true) ||
+                                 desc.contains("TUNNEL", ignoreCase = true) ||
+                                 desc.contains("ERR_CONNECTION_REFUSED", ignoreCase = true) ||
+                                 desc.contains("ERR_CONNECTION_RESET", ignoreCase = true))
+                            if (isProxyError) {
                                 proxyFallback = true
                                 Log.w(TAG, "Proxy failed (${err.description}) — không fallback để tránh kết quả sai tỉnh")
                                 ProxyHelper.clearProxy()
                                 onError("Proxy lỗi — thử lại để đổi proxy khác")
+                            } else if (transientRetryCount < 1) {
+                                transientRetryCount++
+                                Log.w(TAG, "Transient error (${err.description}), silent reload #$transientRetryCount")
+                                view.reload()
+                            } else if (localProxy != null && !proxyFallback &&
+                                desc.contains("ERR_SSL", ignoreCase = true)) {
+                                // SSL error sau khi đã reload 1 lần + có proxy → proxy SSL issue
+                                proxyFallback = true
+                                Log.w(TAG, "Proxy SSL failed (${err.description}) after reload")
+                                ProxyHelper.clearProxy()
+                                onError("Proxy lỗi — thử lại để đổi proxy khác")
                             } else {
+                                Log.w(TAG, "Page load error (${err.description}) proxy=${localProxy != null}")
                                 onError("Lỗi tải trang: ${err.description}")
                             }
                         }
