@@ -53,8 +53,8 @@ import kotlin.coroutines.resume
 
 private const val TAG = "WebCapture"
 private const val COUNTDOWN_SEC = 6
-private const val MAX_CAPTURE_TILES = 48
-private const val MAX_CAPTURE_CHUNK_HEIGHT_PX = 12_000
+private const val MAX_CAPTURE_TILES = 80
+private const val MAX_CAPTURE_CHUNK_HEIGHT_PX = 24_000
 private const val CAPTURE_SETTLE_MS = 650L
 private const val PIXEL_COPY_RETRIES = 3
 private const val SCREENSHOT_JPEG_QUALITY = 90
@@ -270,14 +270,55 @@ fun WebCaptureScreen(
             wv.evaluateJavascript(GoogleSearchJs.EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS) { r -> cont.resume(r ?: "[]") }
         }
         Log.d(TAG, "RAW HEADING ORDER JS -> $jsonStr")
-        val jsResults = parseJsResults(jsonStr)
+        var jsResults = parseJsResults(jsonStr)
         Log.d(TAG, "PARSED HEADING ORDER ${jsResults.size} results")
         logParsedTopResults(jsResults)
 
-        // Chỉ scroll về đầu sau khi đã lấy top xong.
+        // Nếu chưa đủ 10 kết quả → click "Kết quả tìm kiếm khác" để load thêm (AJAX)
+        var loadMoreAttempts = 0
+        while (jsResults.size < 10 && loadMoreAttempts < 2) {
+            val clicked = suspendCancellableCoroutine<Boolean> { cont ->
+                wv.evaluateJavascript(GoogleSearchJs.CLICK_MORE_RESULTS_JS) { r ->
+                    cont.resume(r?.trim() == "true")
+                }
+            }
+            if (!clicked) break
+            loadMoreAttempts++
+            Log.d(TAG, "Load more results #$loadMoreAttempts — waiting for AJAX...")
+            delay(2500)
+            wv.evaluateJavascript("window.scrollTo({top:document.body.scrollHeight,behavior:'instant'});", null)
+            delay(500)
+            val moreJsonStr = suspendCancellableCoroutine { cont ->
+                wv.evaluateJavascript(GoogleSearchJs.EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS) { r -> cont.resume(r ?: "[]") }
+            }
+            jsResults = parseJsResults(moreJsonStr)
+            Log.d(TAG, "After load more #$loadMoreAttempts: ${jsResults.size} results total")
+            logParsedTopResults(jsResults)
+        }
+
+        // Nếu load more thành công → chụp lại toàn trang để screenshot bao gồm kết quả mới cuối trang
+        val finalCaptureOutput = if (loadMoreAttempts > 0) {
+            // Chờ browser layout xong toàn bộ kết quả AJAX trước khi đo lại chiều cao trang
+            delay(5000)
+            wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+            delay(3000)
+            try {
+                val originalTime = Date(captureOutput.checkedAt)
+                val output = captureWebViewTiles(wv, context.getExternalFilesDir(null), publicIp, originalTime)
+                Log.d(TAG, "Re-captured after load more: ${output.paths.size} tile(s)")
+                output.copy(checkedAt = captureOutput.checkedAt)
+            } catch (e: Exception) {
+                Log.e(TAG, "Re-capture after load more failed", e)
+                captureOutput
+            }
+        } else {
+            captureOutput
+        }
+
         wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
-        Log.d(TAG, "onCaptureDone checkedAt=${captureOutput.checkedAt} paths=${captureOutput.paths.size}")
-        onCaptureDone(captureOutput.paths, jsResults, rawCity, captureOutput.checkedAt)
+        val finalResults = jsResults.take(10)
+        Log.d(TAG, "onCaptureDone checkedAt=${finalCaptureOutput.checkedAt} paths=${finalCaptureOutput.paths.size} results=${finalResults.size}")
+        onCaptureDone(finalCaptureOutput.paths, finalResults, rawCity, finalCaptureOutput.checkedAt)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -542,10 +583,10 @@ private fun logParsedTopResults(results: List<SearchResult>) {
  * Capture full page bằng PixelCopy.
  * Scroll theo CSS px, ghép theo actualY và crop overlap để tránh trùng ảnh.
  */
-private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: String = ""): CaptureOutput {
+private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: String = "", captureTime: Date? = null): CaptureOutput {
     val w       = webView.width.takeIf { it > 0 } ?: 1080
     val viewHPx = webView.height.takeIf { it > 0 } ?: 1920
-    val now     = Date()
+    val now     = captureTime ?: Date()
     val ts      = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(now)
     val tsDisplay = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(now)
     val base    = dir ?: File("/sdcard")
@@ -576,7 +617,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
     var chunkIndex = 1
 
     // Lưu chunk hiện tại: trang thường 1 file, trang quá cao thì nhiều part.
-    fun saveChunkIfNeeded(force: Boolean = false, isLast: Boolean = false) {
+    fun saveChunkIfNeeded(force: Boolean = false, isLast: Boolean = false, contentBottom: Int = 0) {
         if (!chunkHasPixels && !force) return
         val suffix = if (chunkIndex == 1 && totalPhysH <= MAX_CAPTURE_CHUNK_HEIGHT_PX) {
             "full"
@@ -604,9 +645,14 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
             val lines = listOfNotNull(line1, line2)
             val boxW  = (lines.maxOf { textPaint.measureText(it) } + pad * 2).toInt()
             val boxH  = lineH * lines.size + pad
+            // Vẽ tại đáy nội dung thực tế, không phải đáy bitmap được cấp phát
+            val effectiveBottom = if (contentBottom > chunkTop)
+                (contentBottom - chunkTop).coerceAtMost(chunkBitmap.height)
+            else
+                chunkBitmap.height
             val boxL  = (chunkBitmap.width - boxW).toFloat()
-            val boxT  = (chunkBitmap.height - boxH).toFloat()
-            overlayCanvas.drawRect(boxL, boxT, chunkBitmap.width.toFloat(), chunkBitmap.height.toFloat(), bgPaint)
+            val boxT  = (effectiveBottom - boxH).toFloat().coerceAtLeast(0f)
+            overlayCanvas.drawRect(boxL, boxT, chunkBitmap.width.toFloat(), effectiveBottom.toFloat(), bgPaint)
             lines.forEachIndexed { i, text ->
                 overlayCanvas.drawText(text, boxL + pad, boxT + pad + textPaint.textSize + lineH * i, textPaint)
             }
@@ -645,9 +691,15 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
     while (idx < MAX_CAPTURE_TILES) {
         webView.evaluateJavascript("window.scrollTo({top:$offsetCss,behavior:'instant'});", null)
         delay(CAPTURE_SETTLE_MS)
-
-        // Tin vị trí scroll thật của browser (actualY), không tin offset đã yêu cầu.
         val actualY = readActualScrollY(webView, offsetCss)
+        Log.d(
+
+            TAG,
+
+            "actualY=$actualY prev=$prevActualY offsetCss=$offsetCss totalPhysH=$totalPhysH idx=$idx"
+
+        )
+        // Tin vị trí scroll thật của browser (actualY), không tin offset đã yêu cầu.
         if (actualY == prevActualY) break
 
         val latestCssPageH = readPageMetrics(webView, viewHPx).second
@@ -713,7 +765,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
     }
 
     tileBmp.recycle()
-    saveChunkIfNeeded(force = paths.isEmpty(), isLast = true)
+    saveChunkIfNeeded(force = paths.isEmpty(), isLast = true, contentBottom = capturedBottom)
     chunkBitmap.recycle()
     setCaptureOverlaysHidden(webView, hide = false)
 

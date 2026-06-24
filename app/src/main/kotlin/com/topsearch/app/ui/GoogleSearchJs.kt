@@ -1247,6 +1247,18 @@ internal object GoogleSearchJs {
 })()
 """.trimIndent()
 
+    /** Click button "Kết quả tìm kiếm khác" để load thêm kết quả (AJAX, không navigate) */
+    val CLICK_MORE_RESULTS_JS = """
+(function() {
+    var btn = document.querySelector('a[jsname="oHxHid"]')
+           || document.querySelector('[jscontroller="uPUyC"]');
+    if (!btn) return false;
+    btn.scrollIntoView({behavior:'instant', block:'center'});
+    btn.click();
+    return true;
+})()
+""".trimIndent()
+
     /** Điền keyword vào ô tìm kiếm và submit form */
     fun buildSearchJs(keyword: String): String {
         val escaped = keyword.replace("\\", "\\\\").replace("'", "\\'")
