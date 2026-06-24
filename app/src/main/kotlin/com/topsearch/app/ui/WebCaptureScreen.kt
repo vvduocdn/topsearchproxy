@@ -468,9 +468,9 @@ private fun parseJsResults(raw: String): List<SearchResult> {
         val json = raw.trim().let { s ->
             if (s.startsWith("\"") && s.endsWith("\"")) {
                 s.substring(1, s.length - 1)
-                    .replace("\\\"", "\"")
-                    .replace("\\\\/", "/")
                     .replace("\\\\", "\\")
+                    .replace("\\\\/", "/")
+                    .replace("\\\"", "\"")
                     .replace("\\n", " ")
                     .replace("\\r", "")
                     .replace("\\t", " ")
@@ -479,9 +479,11 @@ private fun parseJsResults(raw: String): List<SearchResult> {
         val arr = JSONArray(json)
         var rank = 0
         (0 until arr.length()).mapNotNull { i ->
-            val obj   = arr.getJSONObject(i)
+            val obj   = arr.optJSONObject(i) ?: return@mapNotNull null
             val isAd  = obj.optBoolean("ad", false)
             val title = obj.optString("t", "").trim()
+            val blk   = obj.optString("_blk", "")
+            android.util.Log.d("TopSearch", "JS[$i] d=${obj.optString("d","")} blk=$blk t=${title.take(40)}")
             if (isAd || title.isBlank() || title.startsWith("ERROR:", ignoreCase = true)) return@mapNotNull null
             rank++
             SearchResult(

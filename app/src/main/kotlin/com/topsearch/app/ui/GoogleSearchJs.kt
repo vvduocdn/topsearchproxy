@@ -702,6 +702,38 @@ internal object GoogleSearchJs {
             return 999999999;
         }
 
+        function getBlkTag(el) {
+            try {
+                if (!el) return '';
+                var parts = [];
+                var cur = el;
+                var limit = 10;
+                while (cur && limit-- > 0) {
+                    var tag = (cur.tagName || '').toLowerCase();
+                    var id  = cur.id ? '#' + cur.id : '';
+                    var cls = typeof cur.className === 'string'
+                        ? cur.className.trim().split(/\s+/).slice(0, 3).map(function(c){ return '.' + c; }).join('')
+                        : '';
+                    var extra = '';
+                    if (cur.getAttribute) {
+                        var al = cur.getAttribute('aria-label');
+                        if (al) extra += '[al=' + al.replace(/"/g,'').substring(0, 25) + ']';
+                        if (cur.hasAttribute('data-news-doc-id')) extra += '[news-doc]';
+                        if (cur.hasAttribute('data-rpos')) extra += '[rpos=' + cur.getAttribute('data-rpos') + ']';
+                        if (cur.hasAttribute('data-snc')) extra += '[snc]';
+                        if (cur.hasAttribute('data-hveid')) extra += '[hveid]';
+                        if (cur.hasAttribute('jsname')) extra += '[jn=' + cur.getAttribute('jsname') + ']';
+                        if (cur.hasAttribute('jscontroller')) extra += '[jc=' + cur.getAttribute('jscontroller').substring(0,8) + ']';
+                    }
+                    var entry = tag + id + cls + extra;
+                    if (entry && entry !== 'html' && entry !== 'body') parts.push(entry);
+                    if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                    cur = cur.parentElement;
+                }
+                return parts.join(' > ');
+            } catch(e) { return 'err:' + e.message; }
+        }
+
         function outputResults() {
             results.sort(function(a, b) {
                 var ay = typeof a.y === 'number' ? a.y : 999999999;
@@ -709,7 +741,7 @@ internal object GoogleSearchJs {
                 return ay - by;
             });
             return results.map(function(r) {
-                return { t: r.t, d: r.d, u: r.u, ad: r.ad };
+                return { t: r.t, d: r.d, u: r.u, ad: r.ad, _blk: r._blk || '' };
             });
         }
 
@@ -735,7 +767,7 @@ internal object GoogleSearchJs {
                 if (!title || title.length < 3 || title.length > 200) return;
 
                 seen[realUrl] = true;
-                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(link), ad: false });
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(link), ad: false, _blk: getBlkTag(link) });
             } catch(e) {}
         }
 
@@ -758,7 +790,7 @@ internal object GoogleSearchJs {
                 if (!title || title.length < 3 || title.length > 200) return;
 
                 seen[realUrl] = true;
-                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(block), ad: false });
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(block), ad: false, _blk: getBlkTag(block) });
             } catch(e) {}
         }
 
@@ -801,7 +833,7 @@ internal object GoogleSearchJs {
             try {
                 var u = new URL(realUrl);
                 seen[realUrl] = true;
-                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(heading), ad: false });
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(heading), ad: false, _blk: getBlkTag(heading) });
             } catch(e) {}
         }
 
