@@ -653,6 +653,15 @@ internal object GoogleSearchJs {
             }
         }
 
+        function isTikTokLink(link) {
+            try {
+                var host = new URL(resolveUrl(link)).hostname.toLowerCase();
+                return host === 'tiktok.com' || host.endsWith('.tiktok.com');
+            } catch(e) {
+                return false;
+            }
+        }
+
         function isImagePackResult(link) {
             if (!link || !link.closest) return false;
             return !!link.closest('.ULSxyf, #iur, [data-iu], [data-viewer-group]');
@@ -660,23 +669,14 @@ internal object GoogleSearchJs {
 
         function isKnowledgePanelResult(link) {
             if (!link || !link.closest) return false;
-            // Standard Knowledge Panel / non-organic selectors — always exclude.
-            if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel') ||
-                isLocalPanelResult(link)) return true;
-            // g-section-with-header wraps news sections (links have NO <h3>) AND
-            // sometimes wraps organic video result sections (links ALWAYS have <h3>).
-            // Skip the exclusion when the link itself contains an <h3> (organic video card).
-            if (link.closest('g-section-with-header')) {
-                if (!link.querySelector || !link.querySelector('h3')) return true;
-            }
-            // [jscontroller="LhdR0e"] / .vtSz8d = Google video carousel section.
-            // Exception: organic direct result cards always have <h3> inside the link;
-            // carousel items only use [role="heading"] span — never <h3>.
-            // Skip the carousel ancestor check when the link itself contains an h3.
-            if (!link.querySelector || !link.querySelector('h3')) {
-                if (link.closest('[jscontroller="LhdR0e"], .vtSz8d')) return true;
-            }
-            return false;
+            if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel, [jscontroller="LhdR0e"], .vtSz8d'))
+                return true;
+            // Top Stories / Tin bài hàng đầu block — jsname="Yccn4d" là ID nội bộ của Google cho section này
+            if (link.closest('[jsname="Yccn4d"]')) return true;
+            // App Install widget (Google gợi ý cài app) — jsname="tJHJj" container, .qs-ic card
+            if (link.closest('[jsname="tJHJj"], .qs-ic')) return true;
+            if (link.id && link.id.startsWith('aig-ni-')) return true;
+            return isLocalPanelResult(link);
         }
 
         function isLocalPanelResult(el) {
@@ -796,6 +796,38 @@ internal object GoogleSearchJs {
             return 999999999;
         }
 
+        function getBlkTag(el) {
+            try {
+                if (!el) return '';
+                var parts = [];
+                var cur = el;
+                var limit = 10;
+                while (cur && limit-- > 0) {
+                    var tag = (cur.tagName || '').toLowerCase();
+                    var id  = cur.id ? '#' + cur.id : '';
+                    var cls = typeof cur.className === 'string'
+                        ? cur.className.trim().split(/\s+/).slice(0, 3).map(function(c){ return '.' + c; }).join('')
+                        : '';
+                    var extra = '';
+                    if (cur.getAttribute) {
+                        var al = cur.getAttribute('aria-label');
+                        if (al) extra += '[al=' + al.replace(/"/g,'').substring(0, 25) + ']';
+                        if (cur.hasAttribute('data-news-doc-id')) extra += '[news-doc]';
+                        if (cur.hasAttribute('data-rpos')) extra += '[rpos=' + cur.getAttribute('data-rpos') + ']';
+                        if (cur.hasAttribute('data-snc')) extra += '[snc]';
+                        if (cur.hasAttribute('data-hveid')) extra += '[hveid]';
+                        if (cur.hasAttribute('jsname')) extra += '[jn=' + cur.getAttribute('jsname') + ']';
+                        if (cur.hasAttribute('jscontroller')) extra += '[jc=' + cur.getAttribute('jscontroller').substring(0,8) + ']';
+                    }
+                    var entry = tag + id + cls + extra;
+                    if (entry && entry !== 'html' && entry !== 'body') parts.push(entry);
+                    if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                    cur = cur.parentElement;
+                }
+                return parts.join(' > ');
+            } catch(e) { return 'err:' + e.message; }
+        }
+
         function outputResults() {
             results.sort(function(a, b) {
                 var ay = typeof a.y === 'number' ? a.y : 999999999;
@@ -803,7 +835,7 @@ internal object GoogleSearchJs {
                 return ay - by;
             });
             return results.map(function(r) {
-                return { t: r.t, d: r.d, u: r.u, ad: r.ad };
+                return { t: r.t, d: r.d, u: r.u, ad: r.ad, _blk: r._blk || '' };
             });
         }
 
@@ -829,7 +861,7 @@ internal object GoogleSearchJs {
                 if (!title || title.length < 3 || title.length > 200) return;
 
                 seen[realUrl] = true;
-                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(link), ad: false });
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(link), ad: false, _blk: getBlkTag(link) });
             } catch(e) {}
         }
 
@@ -852,7 +884,7 @@ internal object GoogleSearchJs {
                 if (!title || title.length < 3 || title.length > 200) return;
 
                 seen[realUrl] = true;
-                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(block), ad: false });
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(block), ad: false, _blk: getBlkTag(block) });
             } catch(e) {}
         }
 
@@ -895,7 +927,7 @@ internal object GoogleSearchJs {
             try {
                 var u = new URL(realUrl);
                 seen[realUrl] = true;
-                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(heading), ad: false });
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(heading), ad: false, _blk: getBlkTag(heading) });
             } catch(e) {}
         }
 
@@ -911,12 +943,13 @@ internal object GoogleSearchJs {
 
         // Modern/mobile organic cards can use direct zReHs/UWckNb links instead of /url?q=.
         // Nimo-related domains may appear as direct media/result links, so keep them in this pass too.
-        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href], a[href*="nimo"], a[href*="facebook.com/"]');
+        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href], a[href*="nimo"], a[href*="facebook.com/"], a[href*="tiktok.com/"]');
         for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
             if (!isOrganicDirectLink(organicDirectLinks[o]) &&
                 !isNimoLikeLink(organicDirectLinks[o]) &&
                 !isYouTubeLikeLink(organicDirectLinks[o]) &&
-                !isFacebookVideoLink(organicDirectLinks[o])) continue;
+                !isFacebookVideoLink(organicDirectLinks[o]) &&
+                !isTikTokLink(organicDirectLinks[o])) continue;
             addResult(organicDirectLinks[o], false);
         }
 

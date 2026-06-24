@@ -482,6 +482,8 @@ private fun parseJsResults(raw: String): List<SearchResult> {
             val obj   = arr.getJSONObject(i)
             val isAd  = obj.optBoolean("ad", false)
             val title = obj.optString("t", "").trim()
+            val blk   = obj.optString("_blk", "")
+            android.util.Log.d("TopSearch", "JS[$i] d=${obj.optString("d","")} blk=$blk t=${title.take(40)}")
             if (isAd || title.isBlank() || title.startsWith("ERROR:", ignoreCase = true)) return@mapNotNull null
             rank++
             SearchResult(
