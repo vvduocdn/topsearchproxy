@@ -585,9 +585,11 @@ internal object GoogleSearchJs {
 
         function isKnowledgePanelResult(link) {
             if (!link || !link.closest) return false;
-            // [jscontroller="LhdR0e"] / .vtSz8d = Google video carousel section (không phải organic result)
-           return !!link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel, [jscontroller="LhdR0e"], .vtSz8d') ||
-                isLocalPanelResult(link);
+            if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel, [jscontroller="LhdR0e"], .vtSz8d'))
+                return true;
+            // Top Stories / Tin bài hàng đầu block — jsname="Yccn4d" là ID nội bộ của Google cho section này
+            if (link.closest('[jsname="Yccn4d"]')) return true;
+            return isLocalPanelResult(link);
         }
 
         function isLocalPanelResult(el) {
