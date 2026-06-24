@@ -578,6 +578,15 @@ internal object GoogleSearchJs {
             }
         }
 
+        function isTikTokLink(link) {
+            try {
+                var host = new URL(resolveUrl(link)).hostname.toLowerCase();
+                return host === 'tiktok.com' || host.endsWith('.tiktok.com');
+            } catch(e) {
+                return false;
+            }
+        }
+
         function isImagePackResult(link) {
             if (!link || !link.closest) return false;
             return !!link.closest('.ULSxyf, #iur, [data-iu], [data-viewer-group]');
@@ -851,12 +860,13 @@ internal object GoogleSearchJs {
 
         // Modern/mobile organic cards can use direct zReHs/UWckNb links instead of /url?q=.
         // Nimo-related domains may appear as direct media/result links, so keep them in this pass too.
-        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"], a[href*="facebook.com/"]');
+        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a[href*="nimo"], a[href*="facebook.com/"], a[href*="tiktok.com/"]');
         for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
             if (!isOrganicDirectLink(organicDirectLinks[o]) &&
                 !isNimoLikeLink(organicDirectLinks[o]) &&
                 !isYouTubeLikeLink(organicDirectLinks[o]) &&
-                !isFacebookVideoLink(organicDirectLinks[o])) continue;
+                !isFacebookVideoLink(organicDirectLinks[o]) &&
+                !isTikTokLink(organicDirectLinks[o])) continue;
             addResult(organicDirectLinks[o], false);
         }
 
