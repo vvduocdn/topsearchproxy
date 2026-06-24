@@ -270,55 +270,14 @@ fun WebCaptureScreen(
             wv.evaluateJavascript(GoogleSearchJs.EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS) { r -> cont.resume(r ?: "[]") }
         }
         Log.d(TAG, "RAW HEADING ORDER JS -> $jsonStr")
-        var jsResults = parseJsResults(jsonStr)
+        val jsResults = parseJsResults(jsonStr)
         Log.d(TAG, "PARSED HEADING ORDER ${jsResults.size} results")
         logParsedTopResults(jsResults)
 
-        // Nếu chưa đủ 10 kết quả → click "Kết quả tìm kiếm khác" để load thêm (AJAX)
-        var loadMoreAttempts = 0
-        while (jsResults.size < 10 && loadMoreAttempts < 2) {
-            val clicked = suspendCancellableCoroutine<Boolean> { cont ->
-                wv.evaluateJavascript(GoogleSearchJs.CLICK_MORE_RESULTS_JS) { r ->
-                    cont.resume(r?.trim() == "true")
-                }
-            }
-            if (!clicked) break
-            loadMoreAttempts++
-            Log.d(TAG, "Load more results #$loadMoreAttempts — waiting for AJAX...")
-            delay(2500)
-            wv.evaluateJavascript("window.scrollTo({top:document.body.scrollHeight,behavior:'instant'});", null)
-            delay(500)
-            val moreJsonStr = suspendCancellableCoroutine { cont ->
-                wv.evaluateJavascript(GoogleSearchJs.EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS) { r -> cont.resume(r ?: "[]") }
-            }
-            jsResults = parseJsResults(moreJsonStr)
-            Log.d(TAG, "After load more #$loadMoreAttempts: ${jsResults.size} results total")
-            logParsedTopResults(jsResults)
-        }
-
-        // Nếu load more thành công → chụp lại toàn trang để screenshot bao gồm kết quả mới cuối trang
-        val finalCaptureOutput = if (loadMoreAttempts > 0) {
-            // Chờ browser layout xong toàn bộ kết quả AJAX trước khi đo lại chiều cao trang
-            delay(5000)
-            wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
-            delay(3000)
-            try {
-                val originalTime = Date(captureOutput.checkedAt)
-                val output = captureWebViewTiles(wv, context.getExternalFilesDir(null), publicIp, originalTime)
-                Log.d(TAG, "Re-captured after load more: ${output.paths.size} tile(s)")
-                output.copy(checkedAt = captureOutput.checkedAt)
-            } catch (e: Exception) {
-                Log.e(TAG, "Re-capture after load more failed", e)
-                captureOutput
-            }
-        } else {
-            captureOutput
-        }
-
         wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
         val finalResults = jsResults.take(10)
-        Log.d(TAG, "onCaptureDone checkedAt=${finalCaptureOutput.checkedAt} paths=${finalCaptureOutput.paths.size} results=${finalResults.size}")
-        onCaptureDone(finalCaptureOutput.paths, finalResults, rawCity, finalCaptureOutput.checkedAt)
+        Log.d(TAG, "onCaptureDone checkedAt=${captureOutput.checkedAt} paths=${captureOutput.paths.size} results=${finalResults.size}")
+        onCaptureDone(captureOutput.paths, finalResults, rawCity, captureOutput.checkedAt)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
