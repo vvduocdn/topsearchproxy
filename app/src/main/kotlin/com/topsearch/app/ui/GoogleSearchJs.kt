@@ -598,6 +598,9 @@ internal object GoogleSearchJs {
                 return true;
             // Top Stories / Tin bài hàng đầu block — jsname="Yccn4d" là ID nội bộ của Google cho section này
             if (link.closest('[jsname="Yccn4d"]')) return true;
+            // App Install widget (Google gợi ý cài app) — jsname="tJHJj" container, .qs-ic card
+            if (link.closest('[jsname="tJHJj"], .qs-ic')) return true;
+            if (link.id && link.id.startsWith('aig-ni-')) return true;
             return isLocalPanelResult(link);
         }
 
