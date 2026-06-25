@@ -766,6 +766,39 @@ internal object GoogleSearchJs {
             }
         }
 
+        function isPlayGoogleInstallWidget(el) {
+            if (!el || !el.closest) return false;
+            var realUrl = '';
+            try {
+                if (el.matches && el.matches('a[href]')) {
+                    realUrl = resolveUrl(el);
+                } else {
+                    var playLink = el.querySelector && el.querySelector('a[href*="play.google."], a[href*="google.com/url"][href*="play.google"]');
+                    realUrl = playLink ? resolveUrl(playLink) : '';
+                }
+                if (!realUrl || new URL(realUrl).hostname.indexOf('play.google.') !== 0) return false;
+            } catch(e) {
+                return false;
+            }
+
+            if (el.closest('[jsname="tJHJj"], .qs-ic')) return true;
+
+            var card = el.closest('[data-rpos], [data-snc], .N54PNb, [data-hveid], .uIV6Ge, .MjjYud') || el;
+            var controls = card.querySelectorAll ? card.querySelectorAll('button, [role="button"], a, input[type="button"], input[type="submit"]') : [];
+            for (var i = 0; i < controls.length; i++) {
+                var rawLabel = ((controls[i].innerText || controls[i].textContent || controls[i].value || controls[i].getAttribute('aria-label') || '')).toLowerCase();
+                var label = norm(rawLabel);
+                if (rawLabel.indexOf('cài đặt') >= 0 || label === 'cai dat' || label === 'cai at' ||
+                    label === 'install' || label.indexOf('install') >= 0 || label.indexOf('ติดตั้ง') >= 0) return true;
+            }
+            var rawCardText = ((card.innerText || card.textContent || '')).toLowerCase();
+            var cardText = norm(rawCardText);
+            if (cardText.indexOf('google play') >= 0 &&
+                (rawCardText.indexOf('cài đặt') >= 0 || cardText.indexOf('cai dat') >= 0 ||
+                 cardText.indexOf('cai at') >= 0 || cardText.indexOf('install') >= 0 || cardText.indexOf('ติดตั้ง') >= 0)) return true;
+            return false;
+        }
+
         function isAllowedGoogleResultLink(link) {
             try {
                 var realUrl = resolveUrl(link);
@@ -840,6 +873,7 @@ internal object GoogleSearchJs {
             // Standard Knowledge Panel / non-organic selectors — always exclude.
             if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel') ||
                 isLocalPanelResult(link)) return true;
+            if (isPlayGoogleInstallWidget(link)) return true;
             // Top Stories / Tin bài hàng đầu block — jsname="Yccn4d" là ID nội bộ của Google cho section này
             if (link.closest('[jsname="Yccn4d"]')) return true;
             // App Install widget (Google gợi ý cài app) — jsname="tJHJj" container, .qs-ic card
@@ -1074,7 +1108,10 @@ internal object GoogleSearchJs {
             if (!heading) return null;
 
             var direct = heading.closest && heading.closest('a[href]');
-            if (direct && !isAdUrl(direct.getAttribute('href') || direct.href || '') && allowedUrl(resolveUrl(direct))) return direct;
+            if (direct &&
+                !isAdUrl(direct.getAttribute('href') || direct.href || '') &&
+                !isPlayGoogleInstallWidget(direct) &&
+                allowedUrl(resolveUrl(direct))) return direct;
 
             var card = (heading.closest && heading.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid], .uIV6Ge')) || heading.parentElement;
             var links = card && card.querySelectorAll ? card.querySelectorAll('a[href]') : [];
@@ -1083,6 +1120,7 @@ internal object GoogleSearchJs {
                 if (isHiddenResult(links[i])) continue;
                 if (isImagePackResult(links[i])) continue;
                 if (isKnowledgePanelResult(links[i])) continue;
+                if (isPlayGoogleInstallWidget(links[i])) continue;
                 if (isAdBlock(links[i])) continue;
                 if (allowedUrl(resolveUrl(links[i]))) return links[i];
             }

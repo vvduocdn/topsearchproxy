@@ -6,7 +6,7 @@ data class KeywordBatchItem(
     val requestId:    String,
     val keyword:      String,
     val status:       CheckStatus = CheckStatus.PENDING,
-    val retryCount:   Int         = 0,
+    val  retryCount:   Int         = 0,
     val errorMessage: String      = "",
     val completedAt:  String      = "",
 )
