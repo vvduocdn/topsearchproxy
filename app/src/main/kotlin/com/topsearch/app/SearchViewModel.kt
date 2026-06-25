@@ -83,6 +83,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private val _keywordResults = MutableStateFlow<Map<String, List<SearchResult>>>(emptyMap())
     val keywordResults: StateFlow<Map<String, List<SearchResult>>> = _keywordResults.asStateFlow()
 
+    private val _keywordImagePaths = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val keywordImagePaths: StateFlow<Map<String, List<String>>> = _keywordImagePaths.asStateFlow()
+
     init {
         refreshHistory()
         // Populate batch status list when server sends a new batch; persist to disk for crash recovery
@@ -364,6 +367,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             Log.d("TopSearch", buildResultJson(keyword, city, jsResults))
             resultCache[cacheKey(keyword, country)] = jsResults
             reqId?.let { _keywordResults.value = _keywordResults.value + (it to jsResults) }
+            reqId?.let { if (screenshotPaths.isNotEmpty()) _keywordImagePaths.value = _keywordImagePaths.value + (it to screenshotPaths) }
             if (reqId != null) {
                 SearchBridge.dispatchResult(reqId, jsResults, screenshotPaths, proxyIp, jsResults.size, checkedAt)
                 showSocketDone(jsResults, keyword, firstPath, city, proxyIp, proxyFull, country)
@@ -391,6 +395,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 if (results.isNotEmpty()) {
                     resultCache[cacheKey(keyword, country)] = results
                     reqId?.let { _keywordResults.value = _keywordResults.value + (it to results) }
+                    reqId?.let { if (screenshotPaths.isNotEmpty()) _keywordImagePaths.value = _keywordImagePaths.value + (it to screenshotPaths) }
                 }
                 if (reqId != null) {
                     if (results.isNotEmpty()) {
@@ -584,6 +589,12 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             Log.w("TopSearch", "retryBatchKeyword: request not found reqId=$requestId")
             return
         }
+        val currentItem = _keywordBatch.value.firstOrNull { it.requestId == requestId }
+        if (currentItem?.status == CheckStatus.PENDING || currentItem?.status == CheckStatus.IN_PROGRESS) {
+            Log.d("TopSearch", "retryBatchKeyword ignored reqId=$requestId status=${currentItem.status}")
+            return
+        }
+
         var updatedItem: KeywordBatchItem? = null
         _keywordBatch.update { list ->
             list.map {
@@ -599,6 +610,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 }
             }
         }
+        _keywordResults.update { it - requestId }
+        _keywordImagePaths.update { it - requestId }
+        resultCache.remove(cacheKey(req.keyword, req.country))
+
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 val item = updatedItem
@@ -617,7 +632,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 refreshHistory()
             }
             SearchBridge.resumeRequest.emit(listOf(req))
-            Log.d("TopSearch", "Manual retry '${req.keyword}' reqId=$requestId")
+            Log.d("TopSearch", "Manual retry '${req.keyword}' reqId=$requestId previousStatus=${currentItem?.status}")
         }
     }
 

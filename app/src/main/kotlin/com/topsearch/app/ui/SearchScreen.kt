@@ -1,5 +1,6 @@
 package com.topsearch.app.ui
 
+import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -15,6 +16,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -38,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -88,6 +92,7 @@ fun SearchScreen(
     isConnected:          Boolean              = false,
     keywordBatch:         List<KeywordBatchItem>            = emptyList(),
     keywordResults:       Map<String, List<SearchResult>>   = emptyMap(),
+    keywordImagePaths:    Map<String, List<String>>         = emptyMap(),
     historyEntries:       List<KeywordQueueStore.Entry>     = emptyList(),
     manualResult:         Pair<String, List<SearchResult>>? = null,
     onManualResultDismiss: () -> Unit                       = {},
@@ -159,6 +164,7 @@ fun SearchScreen(
                     socketInfo     = socketInfo,
                     keywordBatch   = keywordBatch,
                     keywordResults = keywordResults,
+                    keywordImagePaths = keywordImagePaths,
                     onRetryKeyword = onRetryKeyword,
                     onTestKeyword  = onTestKeyword,
                     onHistoryClick = {
@@ -182,6 +188,7 @@ private fun StandbyContent(
     socketInfo:     String,
     keywordBatch:   List<KeywordBatchItem>          = emptyList(),
     keywordResults: Map<String, List<SearchResult>> = emptyMap(),
+    keywordImagePaths: Map<String, List<String>> = emptyMap(),
     onRetryKeyword: (String) -> Unit = {},
     onTestKeyword:  (keyword: String, proxy: String) -> Unit = { _, _ -> },
     onHistoryClick: () -> Unit = {},
@@ -311,7 +318,7 @@ private fun StandbyContent(
 
         if (keywordBatch.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            KeywordBatchPanel(keywordBatch, keywordResults, onRetryKeyword)
+            KeywordBatchPanel(keywordBatch, keywordResults, keywordImagePaths, onRetryKeyword)
         }
 
         Spacer(Modifier.weight(0.45f))
@@ -854,6 +861,7 @@ private fun HistoryRow(item: KeywordQueueStore.Entry) {
 private fun KeywordBatchPanel(
     items:          List<KeywordBatchItem>,
     keywordResults: Map<String, List<SearchResult>> = emptyMap(),
+    keywordImagePaths: Map<String, List<String>> = emptyMap(),
     onRetryKeyword: (String) -> Unit = {},
 ) {
     val totalCount = items.size
@@ -916,7 +924,12 @@ private fun KeywordBatchPanel(
                     .verticalScroll(rememberScrollState()),
             ) {
                 items.forEachIndexed { index, item ->
-                    KeywordBatchRow(item, keywordResults[item.requestId], onRetryKeyword)
+                    KeywordBatchRow(
+                        item = item,
+                        results = keywordResults[item.requestId],
+                        imagePaths = keywordImagePaths[item.requestId].orEmpty(),
+                        onRetryKeyword = onRetryKeyword,
+                    )
                     if (index < items.lastIndex) {
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 46.dp, end = 14.dp),
@@ -934,6 +947,7 @@ private fun KeywordBatchPanel(
 private fun KeywordBatchRow(
     item: KeywordBatchItem,
     results: List<SearchResult>? = null,
+    imagePaths: List<String> = emptyList(),
     onRetryKeyword: (String) -> Unit = {},
 ) {
     var showResults by remember { mutableStateOf(false) }
@@ -956,7 +970,12 @@ private fun KeywordBatchRow(
         KeywordResultsDialog(
             keyword   = item.keyword,
             results   = results ?: emptyList(),
+            imagePaths = imagePaths,
             onDismiss = { showResults = false },
+            onRetry   = {
+                showResults = false
+                onRetryKeyword(item.requestId)
+            },
         )
     }
 
@@ -1034,66 +1053,183 @@ private fun KeywordBatchRow(
 private fun KeywordResultsDialog(
     keyword:   String,
     results:   List<SearchResult>,
+    imagePaths: List<String> = emptyList(),
     onDismiss: () -> Unit,
+    onRetry:   (() -> Unit)? = null,
 ) {
     val visibleResults = results.take(10)
+    val imageBitmaps = remember(imagePaths) {
+        imagePaths.mapNotNull { path ->
+            BitmapFactory.decodeFile(path)?.asImageBitmap()
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.widthIn(min = 320.dp, max = 380.dp),
+        shape = RoundedCornerShape(14.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 4.dp,
         title = {
-            Text(keyword, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+            Column {
+                Text(
+                    text = keyword,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = buildString {
+                        append(if (results.isEmpty()) "Chưa có kết quả" else "${visibleResults.size}/${results.size} kết quả")
+                        if (imageBitmaps.isNotEmpty()) append(" · ${imageBitmaps.size} ảnh")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         },
         text = {
-            if (results.isEmpty()) {
-                Text("Chưa có kết quả", style = MaterialTheme.typography.bodySmall)
-            } else {
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    visibleResults.forEachIndexed { index, r ->
-                        Row(
-                            modifier          = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 5.dp),
-                            verticalAlignment = Alignment.Top,
-                        ) {
-                            Text(
-                                "${r.rank}.",
-                                style      = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier   = Modifier.width(26.dp),
-                                color      = MaterialTheme.colorScheme.primary,
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "Ảnh",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f))
+                            .verticalScroll(rememberScrollState())
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (imageBitmaps.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
                                 Text(
-                                    r.domain.ifBlank { r.title },
-                                    style      = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
+                                    "Không có ảnh",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                if (r.url.isNotBlank()) {
-                                    Text(
-                                        r.url,
-                                        style    = MaterialTheme.typography.labelSmall,
-                                        color    = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
+                            }
+                        } else {
+                            imageBitmaps.forEach { bitmap ->
+                                Image(
+                                    bitmap = bitmap,
+                                    contentDescription = "Screenshot",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp)),
+                                    contentScale = ContentScale.FillWidth,
+                                )
                             }
                         }
-                        if (index < visibleResults.lastIndex) {
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color     = MaterialTheme.colorScheme.outlineVariant,
-                            )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "Top",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(250.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                        if (results.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f))
+                                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "Chưa có kết quả",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            visibleResults.forEach { r ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f))
+                                        .padding(horizontal = 10.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(7.dp))
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            r.rank.toString(),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            r.domain.ifBlank { r.title },
+                                            style      = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color      = MaterialTheme.colorScheme.onSurface,
+                                            maxLines   = 1,
+                                            overflow   = TextOverflow.Ellipsis,
+                                        )
+                                        if (r.url.isNotBlank()) {
+                                            Text(
+                                                r.url,
+                                                style    = MaterialTheme.typography.labelSmall,
+                                                color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         },
+        dismissButton = {
+            if (onRetry != null) {
+                TextButton(onClick = onRetry) {
+                    Text("Thử lại", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Đóng") }
+            TextButton(onClick = onDismiss) {
+                Text("Đóng")
+            }
         },
     )
 }

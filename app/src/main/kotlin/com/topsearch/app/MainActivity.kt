@@ -46,7 +46,7 @@ class MainActivity : ComponentActivity() {
     // Xin quyền Location khi app mở lần đầu.
     private val locationPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* Kết quả xử lý trong LocationHelper, không cần làm thêm. */ }
+    ) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
                 val isConnected        by viewModel.isConnected.collectAsState()
                 val keywordBatch       by viewModel.keywordBatch.collectAsState()
                 val keywordResults     by viewModel.keywordResults.collectAsState()
+                val keywordImagePaths  by viewModel.keywordImagePaths.collectAsState()
                 val historyEntries     by viewModel.historyEntries.collectAsState()
                 val pendingQueuePrompt by viewModel.pendingQueuePrompt.collectAsState()
 
@@ -93,6 +94,7 @@ class MainActivity : ComponentActivity() {
                             isConnected       = isConnected,
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
+                            keywordImagePaths = keywordImagePaths,
                             historyEntries    = historyEntries,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onRetryKeyword    = viewModel::retryBatchKeyword,
@@ -129,6 +131,7 @@ class MainActivity : ComponentActivity() {
                             isConnected       = isConnected,
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
+                            keywordImagePaths = keywordImagePaths,
                             historyEntries    = historyEntries,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onRetryKeyword    = viewModel::retryBatchKeyword,
@@ -146,6 +149,7 @@ class MainActivity : ComponentActivity() {
                             isConnected           = isConnected,
                             keywordBatch          = keywordBatch,
                             keywordResults        = keywordResults,
+                            keywordImagePaths     = keywordImagePaths,
                             historyEntries        = historyEntries,
                             manualResult          = if (s.socketInfo.isBlank() && s.results.isNotEmpty())
                                                         s.keyword to s.results else null,
@@ -168,6 +172,7 @@ class MainActivity : ComponentActivity() {
                             isConnected       = isConnected,
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
+                            keywordImagePaths = keywordImagePaths,
                             historyEntries    = historyEntries,
                             onSkipProxyChange = viewModel::setSkipProxy,
                             onRetryKeyword    = viewModel::retryBatchKeyword,
