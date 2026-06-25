@@ -5,6 +5,174 @@ package com.topsearch.app.ui
  */
 internal object GoogleSearchJs {
 
+    /** Dump Google consent/interstitial page so selectors can be adjusted from Logcat. */
+    val CONSENT_DEBUG_JS = """
+(function() {
+    try {
+        function txt(el) {
+            return ((el && (el.innerText || el.textContent || el.value || el.getAttribute('aria-label'))) || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .substring(0, 120);
+        }
+        function css(el) {
+            if (!el) return '';
+            var s = (el.tagName || '').toLowerCase();
+            if (el.id) s += '#' + el.id;
+            if (typeof el.className === 'string' && el.className.trim()) {
+                s += '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.');
+            }
+            return s;
+        }
+        var controls = Array.prototype.slice.call(
+            document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"], a')
+        ).slice(0, 40).map(function(el) {
+            return {
+                tag: css(el),
+                id: el.id || '',
+                name: el.getAttribute('name') || '',
+                jsname: el.getAttribute('jsname') || '',
+                aria: el.getAttribute('aria-label') || '',
+                text: txt(el),
+                visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+            };
+        });
+        return JSON.stringify({
+            url: location.href,
+            title: document.title || '',
+            bodyText: txt(document.body).substring(0, 500),
+            forms: Array.prototype.slice.call(document.forms).map(function(f) {
+                return {
+                    action: f.action || '',
+                    method: f.method || '',
+                    id: f.id || '',
+                    controls: Array.prototype.slice.call(f.elements).slice(0, 12).map(function(e) {
+                        return { tag: css(e), name: e.name || '', value: (e.value || '').substring(0, 80), text: txt(e) };
+                    })
+                };
+            }),
+            dialogs: Array.prototype.slice.call(document.querySelectorAll('[role="dialog"], dialog')).map(function(d) {
+                var r = d.getBoundingClientRect();
+                return { tag: css(d), text: txt(d).substring(0, 260), h: Math.round(r.height), scrollH: d.scrollHeight };
+            }),
+            controls: controls
+        });
+    } catch(e) {
+        return JSON.stringify({ error: e.message, url: location.href });
+    }
+})()
+""".trimIndent()
+
+    /**
+     * Accept Google consent when a consent page/dialog appears.
+     * Returns a JSON string: {detected, clicked, reason, ...}.
+     */
+    val ACCEPT_CONSENT_JS = """
+(function() {
+    try {
+        function norm(text) {
+            text = (text || '').toLowerCase();
+            try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
+            return text.replace(/\s+/g, ' ').trim();
+        }
+        function label(el) {
+            return norm(
+                (el && (el.innerText || el.textContent || el.value || el.getAttribute('aria-label'))) || ''
+            );
+        }
+        function visible(el) {
+            if (!el) return false;
+            var r = el.getBoundingClientRect();
+            var st = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+        }
+        function isConsentPage() {
+            var body = norm(document.body ? document.body.innerText || document.body.textContent || '' : '');
+            var hasConsentControl = !!document.querySelector('form[action*="consent"], button#L2AGLb');
+            var hasConsentUrl = location.hostname.indexOf('consent.google.') >= 0 ||
+                location.href.indexOf('/consent') >= 0;
+            var hasConsentText = body.indexOf('before you continue') >= 0 ||
+                body.indexOf('truoc khi tiep tuc') >= 0 ||
+                body.indexOf('ก่อนไปที่ google') >= 0 ||
+                body.indexOf('ก่อนจะไปที่ google') >= 0;
+            var hasSearchBox = !!document.querySelector('textarea[name="q"], input[name="q"]');
+            return hasConsentControl || hasConsentUrl || (hasConsentText && !hasSearchBox);
+        }
+        if (!isConsentPage()) {
+            return JSON.stringify({ detected: false, clicked: false, reason: 'not-consent', url: location.href });
+        }
+
+        Array.prototype.forEach.call(document.querySelectorAll('[role="dialog"], dialog, main, body'), function(el) {
+            try { el.scrollTop = el.scrollHeight; } catch(e) {}
+        });
+        try { window.scrollTo(0, document.documentElement.scrollHeight || document.body.scrollHeight || 0); } catch(e) {}
+
+        function isBadChoice(t) {
+            return t.indexOf('reject') >= 0 ||
+                t.indexOf('decline') >= 0 ||
+                t.indexOf('ปฏิเสธ') >= 0 ||
+                t.indexOf('อ่านเพิ่มเติม') >= 0 ||
+                t.indexOf('more') >= 0 ||
+                t.indexOf('learn') >= 0;
+        }
+        function isAcceptChoice(t) {
+            return t.indexOf('accept all') >= 0 ||
+                t.indexOf('i agree') >= 0 ||
+                t === 'agree' ||
+                t.indexOf('ยอมรับทั้งหมด') >= 0 ||
+                t.indexOf('ยอมรับ') >= 0 ||
+                t.indexOf('dong y') >= 0 ||
+                t.indexOf('chấp nhận tất cả') >= 0 ||
+                t.indexOf('chap nhan tat ca') >= 0;
+        }
+        function click(el, reason) {
+            if (!el || !visible(el)) return null;
+            el.scrollIntoView({ block: 'center', inline: 'center' });
+            el.click();
+            return { detected: true, clicked: true, reason: reason, text: label(el).substring(0, 80), url: location.href };
+        }
+
+        var selectors = [
+            'button#L2AGLb',
+            '#L2AGLb',
+            'button[jsname="higCR"]',
+            'input[type="submit"][value*="Accept"]',
+            'input[type="submit"][value*="agree"]'
+        ];
+        for (var i = 0; i < selectors.length; i++) {
+            var direct = document.querySelector(selectors[i]);
+            var directResult = click(direct, 'selector:' + selectors[i]);
+            if (directResult) return JSON.stringify(directResult);
+        }
+
+        var controls = Array.prototype.slice.call(
+            document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"], a')
+        );
+        for (var j = 0; j < controls.length; j++) {
+            var t = label(controls[j]);
+            if (!t || isBadChoice(t)) continue;
+            if (isAcceptChoice(t)) {
+                var textResult = click(controls[j], 'text');
+                if (textResult) return JSON.stringify(textResult);
+            }
+        }
+        for (var k = 0; k < controls.length; k++) {
+            var mt = label(controls[k]);
+            if (mt.indexOf('อ่านเพิ่มเติม') >= 0 || mt.indexOf('read more') >= 0 || mt.indexOf('more') >= 0) {
+                var moreResult = click(controls[k], 'expand-more');
+                if (moreResult) {
+                    moreResult.clicked = false;
+                    return JSON.stringify(moreResult);
+                }
+            }
+        }
+        return JSON.stringify({ detected: true, clicked: false, reason: 'accept-not-found', url: location.href });
+    } catch(e) {
+        return JSON.stringify({ detected: false, clicked: false, reason: 'error:' + e.message, url: location.href });
+    }
+})()
+""".trimIndent()
+
     /** Dump trang để biết Google đang render cái gì */
     val DEBUG_JS = """
 (function() {

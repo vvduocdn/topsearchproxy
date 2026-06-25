@@ -328,6 +328,8 @@ fun WebCaptureScreen(
                         private var done = false
                         private var transientRetryCount = 0
                         private var homepageLoopCount = 0
+                        private var consentAttemptCount = 0
+                        private var consentAccepted = false
 
                         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                             Log.d(TAG, "onPageStarted url=$url")
@@ -343,6 +345,62 @@ fun WebCaptureScreen(
                                 view.evaluateJavascript(GoogleSearchJs.buildSpoofLocationJs(spoofLat, spoofLng), null)
                             }
                             if (done) return
+
+                            view.evaluateJavascript(GoogleSearchJs.ACCEPT_CONSENT_JS) { consentRaw ->
+                                handleConsentResult(view, url, consentRaw, "CHECK")
+                            }
+                        }
+
+                        private fun handleConsentResult(view: WebView, url: String, rawValue: String?, source: String) {
+                            val raw = rawValue ?: ""
+                            val detected = raw.contains("\"detected\":true") || raw.contains("\\\"detected\\\":true")
+                            val clicked = raw.contains("\"clicked\":true") || raw.contains("\\\"clicked\\\":true")
+                            Log.d(TAG, "CONSENT $source -> $raw")
+                            if (!detected) {
+                                continueAfterConsent(view, url)
+                                return
+                            }
+                            if (consentAccepted && !clicked) {
+                                Log.d(TAG, "CONSENT already accepted; continue current Google page")
+                                continueAfterConsent(view, view.url ?: url)
+                                return
+                            }
+
+                            val attempt = ++consentAttemptCount
+                            statusText = "Dang xu ly Google consent..."
+                            if (clicked) {
+                                consentAccepted = true
+                                consentAttemptCount = 0
+                                Log.d(TAG, "CONSENT accepted attempt=$attempt")
+                                view.postDelayed({
+                                    if (!done) {
+                                        val currentUrl = view.url ?: url
+                                        if (currentUrl.contains("/consent") || currentUrl.contains("consent.google.")) {
+                                            view.reload()
+                                        } else {
+                                            continueAfterConsent(view, currentUrl)
+                                        }
+                                    }
+                                }, 1_500)
+                                return
+                            }
+                            view.evaluateJavascript(GoogleSearchJs.CONSENT_DEBUG_JS) { debugRaw ->
+                                Log.w(TAG, "CONSENT DOM attempt=$attempt -> ${debugRaw ?: "null"}")
+                            }
+                            if (consentAttemptCount >= 3) {
+                                onError("Google consent chua xu ly duoc - xem Logcat CONSENT DOM")
+                                return
+                            }
+                            view.postDelayed({
+                                if (!done) {
+                                    view.evaluateJavascript(GoogleSearchJs.ACCEPT_CONSENT_JS) { retryRaw ->
+                                        handleConsentResult(view, url, retryRaw, "RETRY")
+                                    }
+                                }
+                            }, 1_000)
+                        }
+
+                        private fun continueAfterConsent(view: WebView, url: String) {
                             // Detect CAPTCHA (Google sorry page)
                             if (url.contains("/sorry/") || url.contains("recaptcha.google.com")) {
                                 if (captchaRetryCount >= 3) {
