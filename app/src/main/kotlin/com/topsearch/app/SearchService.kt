@@ -24,7 +24,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import com.topsearch.app.TelegramUploader
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
+import com.topsearch.app.MainActivity
 
 private const val TAG        = "SearchService"
 private const val CHANNEL_ID = "topsearch_socket"
@@ -34,9 +36,18 @@ class SearchService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val enqueueMutex = Mutex()
-    private var activeClient: SignalRClient? = null
-    private var sourceName: String = ""
-    private var workersStarted = false
+
+    // Shared across reconnects — avoids spawning a new thread pool every cycle.
+    private val http = OkHttpClient.Builder()
+        .pingInterval(20, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)   // long-lived connection, no read timeout
+        .build()
+
+    // @Volatile: written from connectLoop (IO thread), read from registerResultCallback (IO thread).
+    @Volatile private var activeClient: SignalRClient? = null
+
+    private var sourceName:    String  = ""
+    private var workersStarted: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -70,33 +81,65 @@ class SearchService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        // Cancel scope first so connectLoop exits cleanly at the next suspension point.
         scope.cancel()
         activeClient?.disconnect()
+        activeClient = null
+        // Shut down the shared OkHttpClient so its thread pool is released.
+        http.dispatcher.executorService.shutdown()
         super.onDestroy()
     }
 
+    // ── Connection loop with exponential backoff ──────────────────────────────
+
     private suspend fun connectLoop() {
+        var retryDelay = 1_000L                  // starts at 1 s, doubles up to 60 s
+
         while (scope.isActive) {
-            val gone = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val gone       = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var didConnect = false                // true once handshake completes
+
             val client = SignalRClient(
-                url            = BuildConfig.SOCKET_URL,
-                onKeyword      = ::onKeyword,
+                url         = BuildConfig.SOCKET_URL,
+                http        = http,
+                onConnected = {
+                    // Fires on OkHttp thread after handshake — MutableStateFlow is thread-safe.
+                    didConnect = true
+                    SearchBridge.isConnected.value = true
+                    showNotif("Da ket noi - dang cho keyword")
+                    Log.d(TAG, "SignalR handshake OK")
+                },
                 onBatch        = ::onBatch,
                 onDisconnected = { gone.complete(Unit) },
             )
+
             activeClient = client
             client.connect()
-            SearchBridge.isConnected.value = true
-            showNotif("Da ket noi - dang cho keyword")
 
+            // Suspend until onDisconnected fires (or scope is cancelled → CancellationException).
             gone.await()
 
+            activeClient = null
             SearchBridge.isConnected.value = false
-            showNotif("Mat ket noi - dang ket noi lai...")
-            Log.w(TAG, "Disconnected - retry in 5s")
-            delay(5_000)
+
+            if (!scope.isActive) break           // destroyed — exit without retry
+
+            if (didConnect) {
+                // Successful session ended; reset backoff so next attempt is fast.
+                retryDelay = 1_000L
+                showNotif("Mat ket noi - dang ket noi lai...")
+            } else {
+                // Failed before handshake; back off to avoid hammering the server.
+                showNotif("Ket noi that bai - thu lai sau ${retryDelay / 1000}s...")
+            }
+
+            Log.w(TAG, "Disconnected (didConnect=$didConnect) — retry in ${retryDelay}ms")
+            delay(retryDelay)
+            if (!didConnect) retryDelay = (retryDelay * 2).coerceAtMost(60_000L)
         }
     }
+
+    // ── Keyword dispatching ───────────────────────────────────────────────────
 
     private fun onBatch(requests: List<SearchBridge.SocketRequest>) {
         enqueueRequests(requests, publishBatch = true)
@@ -116,14 +159,11 @@ class SearchService : Service() {
         }
     }
 
-    private fun onKeyword(requestId: String, keyword: String, proxy: String, country: Int) {
-        enqueueRequests(
-            listOf(SearchBridge.SocketRequest(requestId, keyword, proxy, country)),
-            publishBatch = true,
-        )
-    }
-
-    private fun enqueueRequests(requests: List<SearchBridge.SocketRequest>, publishBatch: Boolean, bringToFront: Boolean = true) {
+    private fun enqueueRequests(
+        requests:      List<SearchBridge.SocketRequest>,
+        publishBatch:  Boolean,
+        bringToFront:  Boolean = true,
+    ) {
         val valid = requests.filter { it.requestId.isNotBlank() && it.keyword.isNotBlank() }
         if (valid.isEmpty()) {
             Log.w(TAG, "enqueueRequests ignored empty/invalid batch size=${requests.size}")
@@ -165,15 +205,16 @@ class SearchService : Service() {
                     Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount checkedAt=$checkedAt")
                     Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
                     if (screenshotPaths.isEmpty() && results.isEmpty()) {
-                        failSubmit(requestId, req.keyword, "Submit fail: thiếu cả ảnh lẫn kết quả")
+                        failSubmit(requestId, req.keyword, "Submit fail: thieu ca anh lan ket qua")
                         return@withTimeoutOrNull
                     }
-                    screenshotPaths.forEachIndexed { i, p ->
-                        val file = java.io.File(p)
-                        Log.d(TAG, "  screenshot[$i]=$p exists=${file.exists()} size=${file.length()}B")
+                    if (BuildConfig.DEBUG) {
+                        screenshotPaths.forEachIndexed { i, p ->
+                            val file = java.io.File(p)
+                            Log.d(TAG, "  screenshot[$i]=$p exists=${file.exists()} size=${file.length()}B")
+                        }
                     }
 
-                    // Submit only items that have enough payload fields.
                     val validResults = results.filter { it.domain.isNotBlank() && it.url.isNotBlank() }
                     if (validResults.isEmpty()) {
                         failSubmit(requestId, req.keyword, "Submit fail: top missing domain/url")
@@ -182,7 +223,7 @@ class SearchService : Service() {
                     val toSubmit = if (totalCount < 10) validResults else validResults.take(10)
 
                     val imageUrls = mutableListOf<String>()
-                    val message = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
+                    val message   = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
                     Log.d(TAG, "TELEGRAM messageLen=${message.length} lines=${toSubmit.size}")
                     screenshotPaths.take(1).forEachIndexed { i, path ->
                         Log.d(TAG, "  upload[$i] $path")
@@ -203,9 +244,12 @@ class SearchService : Service() {
                             Log.w(TAG, "TELEGRAM skip text message because image upload failed")
                         }
                     }
+
                     Log.d(TAG, "SUBMIT reqId=$requestId totalParsed=$totalCount submitCount=${toSubmit.size} images=${imageUrls.size} publicIp=$publicIp")
-                    toSubmit.forEachIndexed { i, r ->
-                        Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
+                    if (BuildConfig.DEBUG) {
+                        toSubmit.forEachIndexed { i, r ->
+                            Log.d(TAG, "  item[$i] top=${r.rank} domain=${r.domain} url=${r.url}")
+                        }
                     }
 
                     if (req.isTest) {
@@ -213,7 +257,9 @@ class SearchService : Service() {
                         SearchBridge.emitSubmitSuccess(requestId)
                         showNotif("Test done: ${req.keyword}")
                     } else {
-                        val sent = activeClient?.submit(requestId, toSubmit, imageUrls, publicIp, sourceName, checkedAt) ?: false
+                        val sent = activeClient?.submit(
+                            requestId, toSubmit, imageUrls, publicIp, sourceName, checkedAt,
+                        ) ?: false
                         if (sent) {
                             SearchBridge.emitSubmitSuccess(requestId)
                             showNotif("Da gui ket qua - cho keyword tiep theo")
@@ -231,6 +277,8 @@ class SearchService : Service() {
         SearchBridge.emitSubmitFailure(requestId, reason)
         showNotif(reason)
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun startMainActivity() {
         val i = Intent(this, MainActivity::class.java).apply {
