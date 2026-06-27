@@ -1,6 +1,13 @@
 package com.topsearch.app
 
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -19,7 +26,7 @@ private const val RS = '\u001E'
  *
  * Handshake: client sends {"protocol":"json","version":1}RS, server replies {}RS.
  * Invocations: type=1 messages with "target" and "arguments".
- * Ping/Pong: type=6 kept alive with 20-second OkHttp ping interval.
+ * Ping/Pong: OkHttp 20s TCP ping + client-initiated SignalR type=6 every 15s after handshake.
  *
  * Thread-safety notes:
  *  - [ws] and [handshakeDone] are @Volatile: written on OkHttp callbacks, read on any caller thread.
@@ -36,6 +43,9 @@ class SignalRClient(
     // @Volatile: visible across threads without synchronization.
     @Volatile private var ws:            WebSocket? = null
     @Volatile private var handshakeDone: Boolean    = false
+
+    // One scope per SignalRClient instance — cancelled in disconnect().
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun connect() {
         handshakeDone = false
@@ -89,6 +99,7 @@ class SignalRClient(
     }
 
     fun disconnect() {
+        scope.cancel()
         ws?.close(1000, "shutdown")
         ws = null
     }
@@ -143,6 +154,16 @@ class SignalRClient(
                 }
                 handshakeDone = true
                 Log.d(TAG, "Handshake OK")
+                // Client-initiated SignalR pings every 15 s — server closes if it hears nothing.
+                scope.launch {
+                    while (isActive) {
+                        delay(15_000)
+                        if (handshakeDone) {
+                            ws?.send("""{"type":6}$RS""")
+                            if (BuildConfig.DEBUG) Log.d(TAG, "Client → Ping")
+                        }
+                    }
+                }
                 onConnected()
                 return
             }
