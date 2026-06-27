@@ -31,7 +31,7 @@ android {
             buildConfigField(
                 "String",
                 "SOCKET_URL",
-                "\"wss://baotop-api.toolok.live/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u\"",            )
+                "\"ws://baotop-api.toolok.live/hubs/mobile-check?secret=ds-socket-9k3m7x2q5w8e1r4t6y0u\"",            )
             manifestPlaceholders["usesCleartextTraffic"] = "true"
         }
 
