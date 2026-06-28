@@ -216,6 +216,285 @@ internal object GoogleSearchJs {
 })()
 """.trimIndent()
 
+    /**
+     * Debug rieng cho case keyword "google": log candidate Google links va ly do pass/skip.
+     * Chi dung de soi Logcat, khong tham gia filter top production.
+     */
+    val GOOGLE_RESULT_DEBUG_JS = """
+(function() {
+    try {
+        var root = document.querySelector('#rso, #search') || document.body;
+
+        function norm(text) {
+            text = (text || '').toLowerCase();
+            try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
+            return text.replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+
+        function sample(text, max) {
+            return (text || '').replace(/\s+/g, ' ').trim().substring(0, max || 90);
+        }
+
+        function resolveUrl(link) {
+            var rawHref = link.getAttribute('href') || link.href || '';
+            if (!rawHref) return '';
+            try {
+                var url = new URL(rawHref, 'https://www.google.com');
+                if (url.pathname === '/url' || url.href.indexOf('/url?') >= 0) {
+                    return url.searchParams.get('q') || url.searchParams.get('url') || '';
+                }
+                return url.href;
+            } catch(e) {
+                return '';
+            }
+        }
+
+        function isHidden(el) {
+            if (!el || !el.closest) return false;
+            if (el.closest('[hidden], [aria-hidden="true"]')) return true;
+            try {
+                var r = el.getBoundingClientRect();
+                var s = window.getComputedStyle(el);
+                return r.width <= 0 || r.height <= 0 || s.display === 'none' || s.visibility === 'hidden';
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function isAdBlock(el) {
+            if (!el || !el.closest) return false;
+            if (el.closest('#tads, #tadsb, [data-text-ad], [aria-label="Ads"], [aria-label="Quảng cáo"]')) return true;
+            var card = el.closest('[data-snc], [data-hveid], .MjjYud, .N54PNb, .uEierd, .pla-unit') || el;
+            var nodes = card.querySelectorAll ? card.querySelectorAll('span, div') : [];
+            for (var i = 0; i < Math.min(nodes.length, 80); i++) {
+                var t = norm(nodes[i].innerText || nodes[i].textContent || '');
+                if (!t || t.length > 80) continue;
+                if (t.indexOf('nha tai tro') >= 0 ||
+                    t.indexOf('ket qua duoc tai tro') >= 0 ||
+                    t === 'sponsored' ||
+                    t === 'quang cao') return true;
+            }
+            return false;
+        }
+
+        function isAppsSuggestionBlock(el) {
+            if (!el || !el.closest) return false;
+            var cur = el;
+            var depth = 0;
+            while (cur && depth++ < 12) {
+                if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                if (cur.querySelectorAll) {
+                    var headings = cur.querySelectorAll('h2, h3, [role="heading"]');
+                    var hasAppsTitle = false;
+                    for (var i = 0; i < headings.length; i++) {
+                        var title = norm(headings[i].innerText || headings[i].textContent || '');
+                        if (title === 'ung dung' || title === 'apps') {
+                            hasAppsTitle = true;
+                            break;
+                        }
+                    }
+                    var curText = norm(cur.innerText || cur.textContent || '');
+                    if (!hasAppsTitle && (curText.indexOf('ung dung') >= 0 || curText.indexOf('apps') >= 0)) {
+                        hasAppsTitle = true;
+                    }
+                    if (hasAppsTitle) {
+                        var playLinks = cur.querySelectorAll('a[href*="play.google."], a[href*="google.com/url"][href*="play.google"]');
+                        if (playLinks.length >= 2) return true;
+                    }
+                }
+                cur = cur.parentElement;
+            }
+            return false;
+        }
+
+        function isMobileSuggestionRow(el) {
+            if (!el || !el.closest || !el.matches) return false;
+            if (!el.matches('a.tNxQIb[href], a.nEWj3b[href]')) return false;
+            if (el.querySelector && el.querySelector('h3')) return false;
+            return !!el.closest('.Va3FIb, .E8hWLe');
+        }
+
+        function titleOf(link) {
+            var titleEl = link.querySelector && link.querySelector('h3, .LC20lb, .MBeuO, .F0FGWb');
+            if (!titleEl) {
+                var card = link.closest && link.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid], .uIV6Ge');
+                titleEl = card && card.querySelector ? card.querySelector('h3, .LC20lb, .MBeuO, .F0FGWb, [role="heading"]') : null;
+            }
+            return sample(titleEl ? (titleEl.innerText || titleEl.textContent || '') : (link.innerText || link.textContent || ''), 120);
+        }
+
+        function isAllowedGoogleProductUrl(realUrl) {
+            try {
+                var u = new URL(realUrl);
+                var host = u.hostname.toLowerCase();
+                if (host.indexOf('play.google.') === 0) return true;
+                if (host.indexOf('docs.google.') === 0) return true;
+                if (host === 'colab.research.google.com') return true;
+                if (host === 'workspace.google.com' || host.endsWith('.workspace.google.com')) return true;
+                if (host === 'support.google.com' || host.endsWith('.support.google.com')) return true;
+                if (host === 'developers.google.com' || host === 'cloud.google.com') return true;
+                return false;
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function isBlockedGoogleUtilityUrl(realUrl) {
+            try {
+                var u = new URL(realUrl);
+                var host = u.hostname.toLowerCase();
+                var path = u.pathname.toLowerCase();
+                if (isAllowedGoogleProductUrl(realUrl)) return false;
+                if (host.indexOf('maps.google.') === 0) return true;
+                if (host.indexOf('accounts.google.') === 0) return true;
+                if (host.indexOf('consent.google.') === 0) return true;
+                if (host.indexOf('googleadservices.') === 0) return true;
+                if (host === 'www.google.com' || host === 'google.com' || /^google\./.test(host)) {
+                    return path === '' || path === '/' ||
+                        path.indexOf('/search') === 0 ||
+                        path.indexOf('/maps') === 0 ||
+                        path.indexOf('/url') === 0 ||
+                        path.indexOf('/sorry') === 0 ||
+                        path.indexOf('/preferences') === 0 ||
+                        path.indexOf('/setprefs') === 0;
+                }
+                return false;
+            } catch(e) {
+                return true;
+            }
+        }
+
+        function allowedUrl(realUrl) {
+            if (!realUrl || realUrl.indexOf('http') !== 0) return false;
+            if (realUrl.indexOf('/aclk?') >= 0) return false;
+            if (realUrl.indexOf('googleadservices') >= 0) return false;
+            try {
+                var host = new URL(realUrl).hostname.toLowerCase();
+                if (host.indexOf('google') >= 0 && isBlockedGoogleUtilityUrl(realUrl)) return false;
+                if (host.indexOf('gstatic.') >= 0) return false;
+                if (host.indexOf('googleusercontent.') >= 0) return false;
+                return true;
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function isGoogleRootOrganic(link, realUrl, title) {
+            try {
+                var u = new URL(realUrl);
+                var host = u.hostname.toLowerCase();
+                var path = u.pathname.toLowerCase();
+                var search = (u.search || '').toLowerCase();
+                var isGoogleRootHost = host === 'google.com' ||
+                    host === 'www.google.com' ||
+                    /^google\.[a-z.]+$/.test(host) ||
+                    /^www\.google\.[a-z.]+$/.test(host);
+                return isGoogleRootHost &&
+                    (path === '/' || path === '/index.html') &&
+                    (!search || /^\?hl=[a-z0-9_-]+$/.test(search)) &&
+                    norm(title) === 'google';
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function nodePath(el) {
+            var parts = [];
+            var cur = el;
+            var depth = 0;
+            while (cur && depth++ < 8) {
+                var tag = (cur.tagName || '').toLowerCase();
+                if (!tag) break;
+                var cls = typeof cur.className === 'string' && cur.className.trim()
+                    ? '.' + cur.className.trim().split(/\s+/).slice(0, 2).join('.')
+                    : '';
+                var extra = '';
+                if (cur.id) extra += '#' + cur.id;
+                if (cur.hasAttribute && cur.hasAttribute('data-rpos')) extra += '[rpos=' + cur.getAttribute('data-rpos') + ']';
+                if (cur.hasAttribute && cur.hasAttribute('data-snc')) extra += '[snc]';
+                if (cur.hasAttribute && cur.hasAttribute('jsname')) extra += '[jn=' + cur.getAttribute('jsname') + ']';
+                parts.push(tag + extra + cls);
+                if (cur.id === 'rso' || cur.id === 'search') break;
+                cur = cur.parentElement;
+            }
+            return parts.join(' < ');
+        }
+
+        var links = root.querySelectorAll('a[href]');
+        var items = [];
+        for (var i = 0; i < links.length && items.length < 30; i++) {
+            var link = links[i];
+            var raw = link.getAttribute('href') || '';
+            var realUrl = resolveUrl(link);
+            var haystack = (raw + ' ' + realUrl + ' ' + (link.innerText || link.textContent || '')).toLowerCase();
+            if (haystack.indexOf('google') < 0 && haystack.indexOf('gmail') < 0 && haystack.indexOf('chrome') < 0) continue;
+
+            var title = titleOf(link);
+            var skip = [];
+            var swu = !!(link.closest && link.closest('.SwU7oc'));
+            var apps = isAppsSuggestionBlock(link);
+            var mobileSuggestion = isMobileSuggestionRow(link);
+            var ad = isAdBlock(link);
+            var hidden = isHidden(link);
+            var allowed = allowedUrl(realUrl);
+            var rootOrganic = isGoogleRootOrganic(link, realUrl, title);
+            var rootUrlShape = false;
+            var rootTitleOk = norm(title) === 'google';
+            try {
+                var ru = new URL(realUrl);
+                var rs = (ru.search || '').toLowerCase();
+                var rh = ru.hostname.toLowerCase();
+                var rp = ru.pathname.toLowerCase();
+                rootUrlShape = (rh === 'google.com' || rh === 'www.google.com' || /^google\.[a-z.]+$/.test(rh) || /^www\.google\.[a-z.]+$/.test(rh)) &&
+                    (rp === '/' || rp === '/index.html') &&
+                    (!rs || /^\?hl=[a-z0-9_-]+$/.test(rs));
+            } catch(e) {}
+
+            if (swu) skip.push('SwU7oc-sitelink');
+            if (apps) skip.push('apps-suggestion-block');
+            if (mobileSuggestion) skip.push('mobile-suggestion-row');
+            if (ad) skip.push('ad-block');
+            if (hidden) skip.push('hidden');
+            if (!allowed && !rootOrganic) skip.push('url-not-allowed');
+
+            var u = null;
+            try { u = new URL(realUrl); } catch(e) {}
+            items.push({
+                raw: sample(raw, 100),
+                url: sample(realUrl, 120),
+                host: u ? u.hostname : '',
+                path: u ? u.pathname : '',
+                search: u ? u.search : '',
+                title: title,
+                text: sample(link.innerText || link.textContent || '', 100),
+                organicDirect: !!(link.matches && link.matches('a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href]')),
+                hasH3: !!(link.querySelector && link.querySelector('h3')),
+                allowedUrl: allowed,
+                googleRootOrganic: rootOrganic,
+                googleRootUrlShape: rootUrlShape,
+                googleRootTitleOk: rootTitleOk,
+                swu7oc: swu,
+                appsBlock: apps,
+                mobileSuggestionRow: mobileSuggestion,
+                ad: ad,
+                hidden: hidden,
+                willAddLikeFilter: skip.length === 0,
+                skip: skip,
+                pathTrace: nodePath(link)
+            });
+        }
+
+        return JSON.stringify({
+            href: location.href,
+            candidates: items.length,
+            items: items
+        });
+    } catch(e) {
+        return JSON.stringify({ error: e.message, href: location.href });
+    }
+})()
+""".trimIndent()
+
     /** JS poll — chờ đến khi Google render xong ít nhất 1 kết quả */
     val WAIT_READY_JS = """
 (function() {
@@ -727,13 +1006,48 @@ internal object GoogleSearchJs {
 
                 if (host.indexOf('play.google.') === 0) return true;
                 if (host.indexOf('docs.google.') === 0) return true;
+                if (host === 'colab.research.google.com') return true;
                 if ((host === 'www.google.com' || host === 'google.com') && path.indexOf('/docs/about') >= 0) return true;
-                if (host === 'workspace.google.com' && path.indexOf('/products/docs') >= 0) return true;
-                if (host === 'support.google.com' && path.indexOf('/docs/') === 0) return true;
+                if (host === 'workspace.google.com' || host.endsWith('.workspace.google.com')) return true;
+                if (host === 'support.google.com') return true;
+                if (host === 'developers.google.com') return true;
+                if (host === 'cloud.google.com') return true;
+                if (host === 'firebase.google.com') return true;
+                if (host === 'ai.google.dev') return true;
 
                 return false;
             } catch(e) {
                 return false;
+            }
+        }
+
+        function isBlockedGoogleUtilityUrl(realUrl) {
+            try {
+                var u = new URL(realUrl);
+                var host = u.hostname.toLowerCase();
+                var path = u.pathname.toLowerCase();
+
+                if (isAllowedGoogleProductUrl(realUrl)) return false;
+                if (host.indexOf('maps.google.') === 0) return true;
+                if (host.indexOf('accounts.google.') === 0) return true;
+                if (host.indexOf('consent.google.') === 0) return true;
+                if (host.indexOf('recaptcha.google.') === 0) return true;
+                if (host.indexOf('googleadservices.') === 0) return true;
+
+                if (host === 'www.google.com' || host === 'google.com' || /^google\./.test(host)) {
+                    return path === '' ||
+                        path === '/' ||
+                        path.indexOf('/search') === 0 ||
+                        path.indexOf('/maps') === 0 ||
+                        path.indexOf('/url') === 0 ||
+                        path.indexOf('/sorry') === 0 ||
+                        path.indexOf('/preferences') === 0 ||
+                        path.indexOf('/setprefs') === 0;
+                }
+
+                return false;
+            } catch(e) {
+                return true;
             }
         }
 
@@ -743,7 +1057,7 @@ internal object GoogleSearchJs {
             if (realUrl.indexOf('googleadservices') >= 0) return false;
             try {
                 var host = new URL(realUrl).hostname.toLowerCase();
-                if (host.indexOf('google.') >= 0 && !isAllowedGoogleProductUrl(realUrl)) return false;
+                if (host.indexOf('google') >= 0 && isBlockedGoogleUtilityUrl(realUrl)) return false;
                 if (host.indexOf('gstatic.') >= 0) return false;
                 if (host.indexOf('googleusercontent.') >= 0) return false;
                 return true;
@@ -772,6 +1086,7 @@ internal object GoogleSearchJs {
             try {
                 if (el.matches && el.matches('a[href]')) {
                     realUrl = resolveUrl(el);
+                    if (!realUrl || new URL(realUrl).hostname.indexOf('play.google.') !== 0) return false;
                 } else {
                     var playLink = el.querySelector && el.querySelector('a[href*="play.google."], a[href*="google.com/url"][href*="play.google"]');
                     realUrl = playLink ? resolveUrl(playLink) : '';
@@ -797,6 +1112,45 @@ internal object GoogleSearchJs {
                 (rawCardText.indexOf('cài đặt') >= 0 || cardText.indexOf('cai dat') >= 0 ||
                  cardText.indexOf('cai at') >= 0 || cardText.indexOf('install') >= 0 || cardText.indexOf('ติดตั้ง') >= 0)) return true;
             return false;
+        }
+
+        function isAppsSuggestionBlock(el) {
+            if (!el || !el.closest) return false;
+
+            var cur = el;
+            var depth = 0;
+            while (cur && depth++ < 12) {
+                if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                if (cur.querySelectorAll) {
+                    var headings = cur.querySelectorAll('h2, h3, [role="heading"]');
+                    var hasAppsTitle = false;
+                    for (var i = 0; i < headings.length; i++) {
+                        var title = norm(headings[i].innerText || headings[i].textContent || '');
+                        if (title === 'ung dung' || title === 'apps') {
+                            hasAppsTitle = true;
+                            break;
+                        }
+                    }
+                    var curText = norm(cur.innerText || cur.textContent || '');
+                    if (!hasAppsTitle && (curText.indexOf('ung dung') >= 0 || curText.indexOf('apps') >= 0)) {
+                        hasAppsTitle = true;
+                    }
+
+                    if (hasAppsTitle) {
+                        var playLinks = cur.querySelectorAll('a[href*="play.google."], a[href*="google.com/url"][href*="play.google"]');
+                        if (playLinks.length >= 2) return true;
+                    }
+                }
+                cur = cur.parentElement;
+            }
+            return false;
+        }
+
+        function isMobileSuggestionRow(el) {
+            if (!el || !el.closest || !el.matches) return false;
+            if (!el.matches('a.tNxQIb[href], a.nEWj3b[href]')) return false;
+            if (el.querySelector && el.querySelector('h3')) return false;
+            return !!el.closest('.Va3FIb, .E8hWLe');
         }
 
         function isAllowedGoogleResultLink(link) {
@@ -829,6 +1183,41 @@ internal object GoogleSearchJs {
         function isYouTubeLikeLink(link) {
             try {
                 return isYouTubeLikeUrl(resolveUrl(link));
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function isAllowedGoogleRootOrganicLink(link) {
+            try {
+                if (!link) return false;
+                if (isKnowledgePanelResult(link) || isAdBlock(link) || isHiddenResult(link)) return false;
+
+                var u = new URL(resolveUrl(link));
+                var host = u.hostname.toLowerCase();
+                var path = u.pathname.toLowerCase();
+                var isGoogleRootHost = host === 'google.com' ||
+                    host === 'www.google.com' ||
+                    /^google\.[a-z.]+$/.test(host) ||
+                    /^www\.google\.[a-z.]+$/.test(host);
+                if (!isGoogleRootHost || (path !== '/' && path !== '/index.html')) return false;
+
+                var search = (u.search || '').toLowerCase();
+                if (search && !/^\?hl=[a-z0-9_-]+$/.test(search)) return false;
+
+                var card = link.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid], .uIV6Ge, .tF2Cxc, .Ww4FFb') || link;
+                var titleEl = link.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') ||
+                              (card.querySelector ? card.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') : null);
+                var title = norm(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+                if (title === 'google') return true;
+
+                // Some mobile layouts render root google.com as a normal card but title is outside
+                // the link/card class set. Accept only when the same card visibly identifies Google.
+                var cardText = norm(card.innerText || card.textContent || '');
+                var sourceText = norm((card.querySelector && card.querySelector('cite, .VuuXrf, .CA5RN')) ?
+                    (card.querySelector('cite, .VuuXrf, .CA5RN').innerText || card.querySelector('cite, .VuuXrf, .CA5RN').textContent || '') : '');
+                return cardText.indexOf('google') >= 0 &&
+                    (sourceText.indexOf('google') >= 0 || cardText.indexOf('www google com') >= 0 || cardText.indexOf('https www google com') >= 0);
             } catch(e) {
                 return false;
             }
@@ -874,6 +1263,10 @@ internal object GoogleSearchJs {
             if (link.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"], g-scrolling-carousel') ||
                 isLocalPanelResult(link)) return true;
             if (isPlayGoogleInstallWidget(link)) return true;
+            if (isAppsSuggestionBlock(link)) return true;
+            if (isMobileSuggestionRow(link)) return true;
+            // Personalized/sitelink suggestion table: has h3 rows, but not organic top results.
+            if (link.closest('.SwU7oc')) return true;
             // Top Stories / Tin bài hàng đầu block — jsname="Yccn4d" là ID nội bộ của Google cho section này
             if (link.closest('[jsname="Yccn4d"]')) return true;
             // App Install widget (Google gợi ý cài app) — jsname="tJHJj" container, .qs-ic card
@@ -1064,7 +1457,7 @@ internal object GoogleSearchJs {
             if (isKnowledgePanelResult(link)) return;
             if (isAdBlock(link)) return;
 
-            if (!allowedUrl(realUrl)) return;
+            if (!allowedUrl(realUrl) && !isAllowedGoogleRootOrganicLink(link)) return;
             if (seen[realUrl]) return;
 
             try {
@@ -1111,7 +1504,7 @@ internal object GoogleSearchJs {
             if (direct &&
                 !isAdUrl(direct.getAttribute('href') || direct.href || '') &&
                 !isPlayGoogleInstallWidget(direct) &&
-                allowedUrl(resolveUrl(direct))) return direct;
+                (allowedUrl(resolveUrl(direct)) || isAllowedGoogleRootOrganicLink(direct))) return direct;
 
             var card = (heading.closest && heading.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid], .uIV6Ge')) || heading.parentElement;
             var links = card && card.querySelectorAll ? card.querySelectorAll('a[href]') : [];
@@ -1122,9 +1515,78 @@ internal object GoogleSearchJs {
                 if (isKnowledgePanelResult(links[i])) continue;
                 if (isPlayGoogleInstallWidget(links[i])) continue;
                 if (isAdBlock(links[i])) continue;
-                if (allowedUrl(resolveUrl(links[i]))) return links[i];
+                if (allowedUrl(resolveUrl(links[i])) || isAllowedGoogleRootOrganicLink(links[i])) return links[i];
             }
             return null;
+        }
+
+        function findGoogleRootLinkNearHeading(heading) {
+            if (!heading) return null;
+
+            var direct = heading.closest && heading.closest('a[href]');
+            if (direct && isAllowedGoogleRootOrganicLink(direct)) return direct;
+
+            var card = (heading.closest && heading.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid], .uIV6Ge')) || heading.parentElement;
+            var links = card && card.querySelectorAll ? card.querySelectorAll('a[href]') : [];
+            for (var i = 0; i < links.length; i++) {
+                if (isAdUrl(links[i].getAttribute('href') || links[i].href || '')) continue;
+                if (isHiddenResult(links[i])) continue;
+                if (isImagePackResult(links[i])) continue;
+                if (isKnowledgePanelResult(links[i])) continue;
+                if (isPlayGoogleInstallWidget(links[i])) continue;
+                if (isAdBlock(links[i])) continue;
+                if (isAllowedGoogleRootOrganicLink(links[i])) return links[i];
+            }
+            return null;
+        }
+
+        function addGoogleRootHeadingResult(heading) {
+            if (!heading) return;
+            if (isHiddenResult(heading)) return;
+            if (isImagePackResult(heading)) return;
+            if (isKnowledgePanelResult(heading)) return;
+            if (isAdBlock(heading)) return;
+
+            var title = cleanTitle(heading.innerText || heading.textContent || '');
+            if (norm(title) !== 'google') return;
+
+            var link = findGoogleRootLinkNearHeading(heading);
+            if (!link) return;
+
+            var realUrl = resolveUrl(link);
+            if (!isAllowedGoogleRootOrganicLink(link)) return;
+            if (seen[realUrl]) return;
+
+            try {
+                var u = new URL(realUrl);
+                seen[realUrl] = true;
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(heading), ad: false, _blk: getBlkTag(heading) });
+            } catch(e) {}
+        }
+
+        function addGoogleRootLinkResult(link) {
+            if (!link) return;
+            if (isHiddenResult(link)) return;
+            if (isImagePackResult(link)) return;
+            if (isKnowledgePanelResult(link)) return;
+            if (isPlayGoogleInstallWidget(link)) return;
+            if (isAdBlock(link)) return;
+            if (!isAllowedGoogleRootOrganicLink(link)) return;
+
+            var realUrl = resolveUrl(link);
+            if (seen[realUrl]) return;
+
+            try {
+                var u = new URL(realUrl);
+                var card = link.closest('[data-rpos], .MjjYud, [data-snc], .N54PNb, [data-hveid], .uIV6Ge, .tF2Cxc, .Ww4FFb') || link;
+                var titleEl = link.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') ||
+                              (card.querySelector ? card.querySelector('h3, [role="heading"], .LC20lb, .MBeuO, .F0FGWb') : null);
+                var title = cleanTitle(titleEl ? (titleEl.innerText || titleEl.textContent || '') : '');
+                if (norm(title) !== 'google') title = 'Google';
+
+                seen[realUrl] = true;
+                results.push({ t: title, d: u.hostname, u: realUrl, y: resultOrderKey(card), ad: false, _blk: getBlkTag(link) });
+            } catch(e) {}
         }
 
         function addHeadingResult(heading) {
@@ -1141,7 +1603,7 @@ internal object GoogleSearchJs {
             if (!link) return;
 
             var realUrl = resolveUrl(link);
-            if (!allowedUrl(realUrl)) return;
+            if (!allowedUrl(realUrl) && !isAllowedGoogleRootOrganicLink(link)) return;
             if (seen[realUrl]) return;
 
             try {
@@ -1163,14 +1625,29 @@ internal object GoogleSearchJs {
 
         // Modern/mobile organic cards can use direct zReHs/UWckNb links instead of /url?q=.
         // Nimo-related domains may appear as direct media/result links, so keep them in this pass too.
-        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href], a[href*="nimo"], a[href*="facebook.com/"], a[href*="tiktok.com/"]');
+        var organicDirectLinks = document.querySelectorAll('a.zReHs[href], a[jsname="UWckNb"][href], a.OcpZAb[href], a[href*="nimo"], a[href*="facebook.com/"], a[href*="tiktok.com/"], a[href^="https://www.google."], a[href^="http://www.google."], a[href^="https://google."], a[href^="http://google."]');
         for (var o = 0; o < organicDirectLinks.length && results.length < 20; o++) {
             if (!isOrganicDirectLink(organicDirectLinks[o]) &&
                 !isNimoLikeLink(organicDirectLinks[o]) &&
                 !isYouTubeLikeLink(organicDirectLinks[o]) &&
                 !isFacebookVideoLink(organicDirectLinks[o]) &&
-                !isTikTokLink(organicDirectLinks[o])) continue;
+                !isTikTokLink(organicDirectLinks[o]) &&
+                !isAllowedGoogleRootOrganicLink(organicDirectLinks[o])) continue;
             addResult(organicDirectLinks[o], false);
+        }
+
+        // Root Google can also appear without trailing slash or without stable organic classes.
+        var googleRootLinks = document.querySelectorAll('a[href^="https://www.google."], a[href^="http://www.google."], a[href^="https://google."], a[href^="http://google."]');
+        for (var gl = 0; gl < googleRootLinks.length && results.length < 20; gl++) {
+            addGoogleRootLinkResult(googleRootLinks[gl]);
+        }
+
+        // Case keyword "google": top root can render as DIV[role=heading]/.F0FGWb
+        // while other results already exist, so the generic results.length===0 fallback never runs.
+        // Keep this pass narrow: title must be exactly "Google" and card must contain root google.com.
+        var googleRootHeadings = document.querySelectorAll('[role="heading"], .F0FGWb, .LC20lb, .MBeuO');
+        for (var gr = 0; gr < googleRootHeadings.length && results.length < 20; gr++) {
+            addGoogleRootHeadingResult(googleRootHeadings[gr]);
         }
 
         // YouTube video cards can expose the canonical URL on the video block instead of a standard result anchor.

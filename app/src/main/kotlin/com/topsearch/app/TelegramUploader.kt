@@ -68,8 +68,7 @@ object TelegramUploader {
         Log.d(TAG, "upload: ${file.name}  size=${file.length()}B captionLen=${caption.length}")
         return uploadMutex.withLock {
             doUpload(file, caption).let { result ->
-                if (result.isNotBlank()) result
-                else {
+                result.ifBlank {
                     Log.w(TAG, "upload retry after 3s: ${file.name}")
                     kotlinx.coroutines.delay(3_000)
                     doUpload(file, caption)

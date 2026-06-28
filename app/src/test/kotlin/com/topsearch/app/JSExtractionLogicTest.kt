@@ -92,11 +92,47 @@ class JSExtractionLogicTest {
 
             host.startsWith("play.google.") ||
                 host.startsWith("docs.google.") ||
+                host == "colab.research.google.com" ||
                 ((host == "www.google.com" || host == "google.com") && path.contains("/docs/about")) ||
-                (host == "workspace.google.com" && path.contains("/products/docs")) ||
-                (host == "support.google.com" && path.startsWith("/docs/"))
+                host == "workspace.google.com" ||
+                host.endsWith(".workspace.google.com") ||
+                host == "support.google.com" ||
+                host == "developers.google.com" ||
+                host == "cloud.google.com" ||
+                host == "firebase.google.com" ||
+                host == "ai.google.dev"
         } catch (_: Exception) {
             false
+        }
+    }
+
+    private fun isBlockedGoogleUtilityUrl(realUrl: String): Boolean {
+        return try {
+            val url = java.net.URL(realUrl)
+            val host = url.host.lowercase()
+            val path = url.path.lowercase()
+
+            if (isAllowedGoogleProductUrl(realUrl)) return false
+            if (host.startsWith("maps.google.")) return true
+            if (host.startsWith("accounts.google.")) return true
+            if (host.startsWith("consent.google.")) return true
+            if (host.startsWith("recaptcha.google.")) return true
+            if (host.startsWith("googleadservices.")) return true
+
+            if (host == "www.google.com" || host == "google.com" || Regex("^google\\.").containsMatchIn(host)) {
+                return path == "" ||
+                    path == "/" ||
+                    path.startsWith("/search") ||
+                    path.startsWith("/maps") ||
+                    path.startsWith("/url") ||
+                    path.startsWith("/sorry") ||
+                    path.startsWith("/preferences") ||
+                    path.startsWith("/setprefs")
+            }
+
+            false
+        } catch (_: Exception) {
+            true
         }
     }
 
@@ -106,10 +142,38 @@ class JSExtractionLogicTest {
         if (realUrl.contains("googleadservices")) return false
         return try {
             val host = java.net.URL(realUrl).host.lowercase()
-            if (host.contains("google.") && !isAllowedGoogleProductUrl(realUrl)) return false
+            if (host.contains("google") && isBlockedGoogleUtilityUrl(realUrl)) return false
             if (host.contains("gstatic.")) return false
             if (host.contains("googleusercontent.")) return false
             true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isAllowedGoogleRootOrganicLink(
+        realUrl: String,
+        title: String,
+        isOrganicDirectLink: Boolean,
+        isKnowledgePanel: Boolean = false,
+        isAdBlock: Boolean = false,
+        isHidden: Boolean = false,
+    ): Boolean {
+        return try {
+            if (isKnowledgePanel || isAdBlock || isHidden) return false
+            val url = java.net.URL(realUrl)
+            val host = url.host.lowercase()
+            val path = url.path.lowercase()
+            val query = url.query?.lowercase().orEmpty()
+            val isGoogleRootHost = host == "google.com" ||
+                host == "www.google.com" ||
+                Regex("^google\\.[a-z.]+$").matches(host) ||
+                Regex("^www\\.google\\.[a-z.]+$").matches(host)
+
+            isGoogleRootHost &&
+                (path.isBlank() || path == "/" || path == "/index.html") &&
+                (query.isBlank() || Regex("^hl=[a-z0-9_-]+$").matches(query)) &&
+                title.trim().lowercase() == "google"
         } catch (_: Exception) {
             false
         }
@@ -122,6 +186,13 @@ class JSExtractionLogicTest {
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun isPlayGoogleInstallWidgetSim(linkHref: String, cardHasPlaySitelink: Boolean): Boolean {
+        val realUrl = resolveUrl(linkHref)
+        val host = runCatching { java.net.URL(realUrl).host.lowercase() }.getOrDefault("")
+        if (!host.startsWith("play.google.")) return false
+        return cardHasPlaySitelink
     }
 
     private fun isNimoLikeLink(href: String): Boolean {
@@ -170,6 +241,21 @@ class JSExtractionLogicTest {
         }
     }
 
+    private fun shouldAddGoogleRootOrganicResult(
+        realUrl: String,
+        title: String,
+        link: SimElem,
+        elementHasH3: Boolean = true,
+    ): Boolean {
+        if (isKnowledgePanelResultSim(link, elementHasH3 = elementHasH3)) return false
+        if (allowedUrl(realUrl)) return true
+        return isAllowedGoogleRootOrganicLink(
+            realUrl = realUrl,
+            title = title,
+            isOrganicDirectLink = isOrganicDirectLinkSim(link),
+        )
+    }
+
     private fun shouldSkipKnowledgePanel(realUrl: String, isInKnowledgePanel: Boolean): Boolean {
         return isInKnowledgePanel
     }
@@ -204,6 +290,18 @@ class JSExtractionLogicTest {
             .filter { it.inSearchRoot }
             .filter { !isAdUrl(it.url) && allowedUrl(resolveUrl(it.url)) }
             .sortedBy { it.orderKey }
+    }
+
+    private fun dedupeByRealUrl(candidates: List<Candidate>): List<Candidate> {
+        val seen = linkedSetOf<String>()
+        return candidates.filter { seen.add(resolveUrl(it.url)) }
+    }
+
+    private fun matchesGoogleRootCandidateSelector(href: String): Boolean {
+        return href.startsWith("https://www.google.") ||
+            href.startsWith("http://www.google.") ||
+            href.startsWith("https://google.") ||
+            href.startsWith("http://google.")
     }
 
     private fun isAdUrl(href: String): Boolean {
@@ -361,11 +459,371 @@ class JSExtractionLogicTest {
     }
 
     @Test
+    fun `allowedUrl allows Google help and product domains`() {
+        assertTrue(allowedUrl("https://support.google.com/"))
+        assertTrue(allowedUrl("https://support.google.com/websearch/answer/123"))
+        assertTrue(allowedUrl("https://support.google.com/drive/answer/2424384?hl=vi"))
+        assertTrue(allowedUrl("https://support.google.com/sheets/answer/9331169?hl=vi"))
+        assertTrue(allowedUrl("https://support.google.com/slides/answer/2763168?hl=vi"))
+        assertTrue(allowedUrl("https://support.google.com/colab/answer/123456?hl=vi"))
+        assertTrue(allowedUrl("https://knowledge.workspace.google.com/kb/google-workspace-help-000005339"))
+        assertTrue(allowedUrl("https://workspace.google.com/intl/vi/products/gmail/"))
+        assertTrue(allowedUrl("https://developers.google.com/search/help"))
+        assertTrue(allowedUrl("https://cloud.google.com/support-hub"))
+    }
+
+    @Test
+    fun `allowedUrl allows Google Colab organic URLs`() {
+        assertTrue(allowedUrl("https://colab.research.google.com/drive/abc123"))
+        assertTrue(allowedUrl("https://colab.research.google.com/github/user/repo/blob/main/notebook.ipynb"))
+    }
+
+    @Test
     fun `allowedUrl keeps other Google internal URLs rejected`() {
         assertFalse(allowedUrl("https://www.google.com/search?q=docs"))
         assertFalse(allowedUrl("https://www.google.com/maps/place/test"))
-        assertFalse(allowedUrl("https://support.google.com/websearch/answer/123"))
-        assertFalse(allowedUrl("https://workspace.google.com/intl/vi/products/gmail/"))
+        assertFalse(allowedUrl("https://accounts.google.com/signin"))
+        assertFalse(allowedUrl("https://consent.google.com/m"))
+        assertFalse(allowedUrl("https://www.google.com/sorry/index"))
+    }
+
+    @Test
+    fun `case_keyword_google case1 allows Google root by URL and title context`() {
+        val realUrl = "https://www.google.com/?hl=vi"
+
+        // Global URL guard still rejects Google root so sitelinks/navigation do not leak.
+        assertFalse(allowedUrl(realUrl))
+
+        // Contextual exception: only root Google URL with title "Google" is allowed.
+        assertTrue(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = realUrl,
+                title = "Google",
+                isOrganicDirectLink = false,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google case1 rejects Google root from suggestion table or wrong context`() {
+        val realUrl = "https://www.google.com/?hl=vi"
+
+        assertFalse(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = realUrl,
+                title = "Google",
+                isOrganicDirectLink = true,
+                isKnowledgePanel = true,
+            )
+        )
+        assertFalse(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = "https://www.google.com/search?q=google",
+                title = "Google",
+                isOrganicDirectLink = true,
+            )
+        )
+        assertFalse(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = realUrl,
+                title = "Gmail",
+                isOrganicDirectLink = true,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google case1 organic Google top survives when SwU7oc sitelinks are siblings`() {
+        val card = SimElem("div", classes = setOf("MjjYud"))
+        val organicLink = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs = mapOf(
+                "href" to "https://www.google.com/?hl=vi",
+                "jsname" to "UWckNb",
+            ),
+            parent = card,
+        )
+        val suggestionTable = SimElem("table", classes = setOf("SwU7oc", "wHYlTd"), parent = card)
+        val gmailLink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://accounts.google.com/Login?service=mail"),
+            parent = suggestionTable,
+        )
+        val playLink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://play.google.com/store/apps/details?id=com.google.android.katniss"),
+            parent = suggestionTable,
+        )
+
+        assertFalse(isKnowledgePanelResultSim(organicLink, elementHasH3 = true))
+        assertTrue(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = "https://www.google.com/?hl=vi",
+                title = "Google",
+                isOrganicDirectLink = false,
+            )
+        )
+        assertTrue(isKnowledgePanelResultSim(gmailLink, elementHasH3 = true))
+        assertTrue(isKnowledgePanelResultSim(playLink, elementHasH3 = true))
+    }
+
+    @Test
+    fun `case_keyword_google case4 root Google is not treated as Play install widget because sibling sitelink is Play`() {
+        val rootHref = "https://www.google.com/?hl=vi"
+
+        assertFalse(isPlayGoogleLink(rootHref))
+        assertFalse(isPlayGoogleInstallWidgetSim(rootHref, cardHasPlaySitelink = true))
+        assertTrue(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = rootHref,
+                title = "Google",
+                isOrganicDirectLink = true,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google case1 still allows root top when Google changes anchor class`() {
+        val card = SimElem("div", classes = setOf("MjjYud"))
+        val changedClassLink = SimElem(
+            "a",
+            classes = setOf("unknownGoogleClass"),
+            attrs = mapOf("href" to "https://www.google.com/?hl=vi"),
+            parent = card,
+        )
+
+        assertFalse(isOrganicDirectLinkSim(changedClassLink))
+        assertTrue(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://www.google.com/?hl=vi",
+                title = "Google",
+                link = changedClassLink,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google allows valid Google root without trailing slash and without sitelinks`() {
+        val card = SimElem("div", classes = setOf("MjjYud"))
+        val rootLink = SimElem(
+            "a",
+            classes = setOf("unknownGoogleClass"),
+            attrs = mapOf("href" to "https://www.google.com"),
+            parent = card,
+        )
+
+        assertTrue(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://www.google.com",
+                title = "Google",
+                link = rootLink,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google root selector catches http google com without stable class`() {
+        val rootHref = "http://www.google.com/"
+
+        assertTrue(matchesGoogleRootCandidateSelector(rootHref))
+        assertTrue(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = rootHref,
+                title = "Google",
+                isOrganicDirectLink = false,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google case1 heading fallback adds Google root when h3 is absent`() {
+        val card = SimElem("div", classes = setOf("MjjYud"))
+        val heading = SimElem("div", classes = setOf("F0FGWb", "MBeuO"), parent = card)
+        val rootLink = SimElem(
+            "a",
+            classes = setOf("unknownGoogleClass"),
+            attrs = mapOf("href" to "https://www.google.com/?hl=vi"),
+            parent = card,
+        )
+        val suggestionTable = SimElem("table", classes = setOf("SwU7oc", "wHYlTd"), parent = card)
+        val sitelink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://play.google.com/store/apps/details/Google_Go?id=com.google.android.apps.searchlite"),
+            parent = suggestionTable,
+        )
+
+        assertFalse(isKnowledgePanelResultSim(heading, elementHasH3 = false))
+        assertTrue(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://www.google.com/?hl=vi",
+                title = "Google",
+                link = rootLink,
+                elementHasH3 = false,
+            )
+        )
+        assertTrue(isKnowledgePanelResultSim(sitelink, elementHasH3 = true))
+    }
+
+    @Test
+    fun `case_keyword_google case1 addResult decision adds only main Google top`() {
+        val card = SimElem("div", classes = setOf("MjjYud"))
+        val organicLink = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs = mapOf(
+                "href" to "https://www.google.com/?hl=vi",
+                "jsname" to "UWckNb",
+            ),
+            parent = card,
+        )
+        val suggestionTable = SimElem("table", classes = setOf("SwU7oc", "wHYlTd"), parent = card)
+        val accountLink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://myaccount.google.com/intro/personal-info?hl=vi"),
+            parent = suggestionTable,
+        )
+        val googleGoLink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://play.google.com/store/apps/details/Google_Go?id=com.google.android.apps.searchlite&hl=vi"),
+            parent = suggestionTable,
+        )
+
+        assertTrue(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://www.google.com/?hl=vi",
+                title = "Google",
+                link = organicLink,
+            )
+        )
+        assertFalse(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://myaccount.google.com/intro/personal-info?hl=vi",
+                title = "Tai khoan Google",
+                link = accountLink,
+            )
+        )
+        assertFalse(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://play.google.com/store/apps/details/Google_Go?id=com.google.android.apps.searchlite&hl=vi",
+                title = "Google Go",
+                link = googleGoLink,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google case2 allows google com vn organic top`() {
+        val realUrl = "https://www.google.com.vn/index.html"
+
+        assertTrue(allowedUrl(realUrl))
+        assertTrue(
+            isAllowedGoogleRootOrganicLink(
+                realUrl = realUrl,
+                title = "Google",
+                isOrganicDirectLink = true,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google keeps google com vn root and google com root even with sitelinks below`() {
+        val card = SimElem("div", classes = setOf("MjjYud"))
+        val googleVnRoot = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs = mapOf("href" to "https://www.google.com.vn/"),
+            parent = card,
+        )
+        val googleRoot = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs = mapOf("href" to "http://www.google.com/"),
+            parent = card,
+        )
+        val suggestionTable = SimElem("table", classes = setOf("SwU7oc", "wHYlTd"), parent = card)
+        val accountSitelink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://myaccount.google.com/intro/personal-info?hl=vi"),
+            parent = suggestionTable,
+        )
+
+        assertTrue(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://www.google.com.vn/",
+                title = "Google",
+                link = googleVnRoot,
+            )
+        )
+        assertTrue(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "http://www.google.com/",
+                title = "Google",
+                link = googleRoot,
+            )
+        )
+        assertTrue(isKnowledgePanelResultSim(accountSitelink, elementHasH3 = true))
+    }
+
+    @Test
+    fun `same Google domain can appear multiple times when URLs are different`() {
+        val candidates = listOf(
+            Candidate("www.google.com", "https://www.google.com/?hl=vi", 1.0),
+            Candidate("www.google.com", "http://www.google.com/", 2.0),
+            Candidate("www.google.com.vn", "https://www.google.com.vn/index.html", 3.0),
+        )
+
+        val result = dedupeByRealUrl(candidates)
+
+        assertEquals(3, result.size)
+        assertEquals("https://www.google.com/?hl=vi", result[0].url)
+        assertEquals("http://www.google.com/", result[1].url)
+        assertEquals("https://www.google.com.vn/index.html", result[2].url)
+    }
+
+    @Test
+    fun `same Google result URL is deduped even when seen through another pass`() {
+        val candidates = listOf(
+            Candidate("www.google.com", "https://www.google.com/?hl=vi", 1.0),
+            Candidate("www.google.com", "https://www.google.com/?hl=vi", 1.1),
+        )
+
+        val result = dedupeByRealUrl(candidates)
+
+        assertEquals(1, result.size)
+        assertEquals("https://www.google.com/?hl=vi", result.single().url)
+    }
+
+    @Test
+    fun `case_keyword_google case2 keeps Gmail and Play sitelinks excluded by SwU7oc`() {
+        val suggestionTable = SimElem(
+            "table",
+            classes = setOf("SwU7oc", "wHYlTd"),
+            attrs = mapOf("role" to "group"),
+        )
+        val gmailLink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://accounts.google.com/Login?service=mail"),
+            parent = suggestionTable,
+        )
+        val playLink = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://play.google.com/store/apps/details?id=com.google.android.katniss"),
+            parent = suggestionTable,
+        )
+
+        assertTrue(isKnowledgePanelResultSim(gmailLink, elementHasH3 = true))
+        assertTrue(isKnowledgePanelResultSim(playLink, elementHasH3 = true))
+        assertFalse(allowedUrl("https://accounts.google.com/Login?service=mail"))
+        assertTrue(allowedUrl("https://play.google.com/store/apps/details?id=com.google.android.katniss"))
     }
 
     @Test
@@ -720,9 +1178,9 @@ class JSExtractionLogicTest {
 
     @Test
     fun `Results filtered by domain exclusion`() {
-        // google.com internal should be rejected
+        // Google search shell/static resources are rejected, product/news domains can be organic tops.
         assertFalse(allowedUrl("https://www.google.com"))
-        assertFalse(allowedUrl("https://news.google.com/topics"))
+        assertTrue(allowedUrl("https://news.google.com/topics"))
         // gstatic rejected
         assertFalse(allowedUrl("https://www.gstatic.com"))
         // googleusercontent rejected
@@ -830,6 +1288,7 @@ class JSExtractionLogicTest {
     private val KP_STANDARD_SELS = listOf(
         ".EyBRub", "[data-kpid]", "[data-maindata*=\"LOCAL_NAV\"]",
         "g-scrolling-carousel",
+        ".SwU7oc",
         // g-section-with-header moved to h3-guarded check below (see isKnowledgePanelResultSim)
     )
     private val KP_CAROUSEL_SELS = listOf(
@@ -845,13 +1304,57 @@ class JSExtractionLogicTest {
      * [elementHasH3 = true] — organic result cards always have <h3> inside the link;
      * carousel items only use [role="heading"] span, never <h3>.
      */
-    private fun isKnowledgePanelResultSim(el: SimElem, elementHasH3: Boolean = false): Boolean {
+    private fun isAppsSuggestionBlockSim(blockHeading: String, playLinkCount: Int): Boolean {
+        val normalized = blockHeading
+            .lowercase()
+            .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+            .let { java.text.Normalizer.normalize(it, java.text.Normalizer.Form.NFD) }
+            .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+            .replace(Regex("[^a-z0-9]+"), " ")
+            .trim()
+        return (
+            normalized == "ung dung" ||
+                normalized == "apps" ||
+                normalized.contains("ung dung") ||
+                normalized.contains("apps")
+            ) && playLinkCount >= 2
+    }
+
+    private fun isAppsSuggestionAncestorSim(ancestorBlocks: List<Pair<String, Int>>): Boolean {
+        return ancestorBlocks.any { (heading, playLinkCount) ->
+            isAppsSuggestionBlockSim(heading, playLinkCount)
+        }
+    }
+
+    private fun isAppsSuggestionAncestorBeforeSearchRootSim(
+        ancestorBlocks: List<Triple<String, Int, Boolean>>,
+    ): Boolean {
+        for ((heading, playLinkCount, isSearchRoot) in ancestorBlocks) {
+            if (isSearchRoot) break
+            if (isAppsSuggestionBlockSim(heading, playLinkCount)) return true
+        }
+        return false
+    }
+
+    private fun isKnowledgePanelResultSim(
+        el: SimElem,
+        elementHasH3: Boolean = false,
+        isAppsSuggestionBlock: Boolean = false,
+        isMobileSuggestionRow: Boolean = false,
+    ): Boolean {
         if (KP_STANDARD_SELS.any { el.closest(it) != null }) return true
+        if (isAppsSuggestionBlock) return true
+        if (isMobileSuggestionRow) return true
         // g-section-with-header: news links have NO h3; organic video cards ALWAYS have h3
         if (el.closest("g-section-with-header") != null && !elementHasH3) return true
         // Carousel check: skip if element has h3 inside (organic video result card)
         if (!elementHasH3 && KP_CAROUSEL_SELS.any { el.closest(it) != null }) return true
         return false
+    }
+
+    private fun isMobileSuggestionRowSim(el: SimElem, elementHasH3: Boolean = false): Boolean {
+        val rowClass = "tNxQIb" in el.classes || "nEWj3b" in el.classes
+        return rowClass && !elementHasH3 && (el.closest(".Va3FIb") != null || el.closest(".E8hWLe") != null)
     }
 
     /**
@@ -1156,6 +1659,146 @@ class JSExtractionLogicTest {
         assertFalse(youTubeBlockHasValidTitle(setOf("[role=\"heading\"]")))
         assertFalse(youTubeBlockHasValidTitle(setOf("span", "div", "section")))
         assertFalse(youTubeBlockHasValidTitle(emptySet()))
+    }
+
+    @Test
+    fun `case_top_domain_invalid case4 — SwU7oc suggestion table is excluded even with h3`() {
+        val suggestionTable = SimElem(
+            "table",
+            classes = setOf("SwU7oc", "wHYlTd"),
+            attrs = mapOf("role" to "group", "aria-label" to "personalized suggestions"),
+        )
+        val row = SimElem("tr", classes = setOf("mslg"), parent = suggestionTable)
+        val link = SimElem(
+            "a",
+            classes = setOf("l"),
+            attrs = mapOf("href" to "https://support.google.com/?hl=vi"),
+            parent = row,
+        )
+
+        assertTrue(isKnowledgePanelResultSim(link, elementHasH3 = true))
+        assertTrue(allowedUrl("https://support.google.com/?hl=vi"))
+    }
+
+    @Test
+    fun `case_keyword_google apps block is excluded when Apps module has multiple Play links`() {
+        val appModule = SimElem("div", classes = setOf("MjjYud"))
+        val playLink = SimElem(
+            "a",
+            attrs = mapOf("href" to "https://play.google.com/store/apps/details?id=com.google.android.googlequicksearchbox"),
+            parent = appModule,
+        )
+
+        assertTrue(isAppsSuggestionBlockSim("Ứng dụng", playLinkCount = 3))
+        assertTrue(
+            isKnowledgePanelResultSim(
+                playLink,
+                elementHasH3 = true,
+                isAppsSuggestionBlock = true,
+            )
+        )
+        assertTrue(allowedUrl("https://play.google.com/store/apps/details?id=com.google.android.googlequicksearchbox"))
+    }
+
+    @Test
+    fun `case_keyword_google apps block is detected from parent ancestor not nearest row`() {
+        // Runtime bug: the nearest [data-hveid] row only contains one Play link,
+        // while the parent Apps module contains heading "Ung dung" and 3 Play links.
+        assertFalse(isAppsSuggestionBlockSim("Google", playLinkCount = 1))
+        assertTrue(
+            isAppsSuggestionAncestorSim(
+                listOf(
+                    "Google" to 1,
+                    "Apps" to 3,
+                    "Ung dung" to 3,
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google apps block is detected from container text without heading selector`() {
+        assertTrue(isAppsSuggestionBlockSim("Apps Google Google Home Gmail Ung dung khac", playLinkCount = 3))
+        assertTrue(isAppsSuggestionBlockSim("Ung dung khac Google Go Gmail", playLinkCount = 2))
+    }
+
+    @Test
+    fun `case_keyword_google Apps mobile row is excluded by row structure`() {
+        val appRow = SimElem("div", classes = setOf("Va3FIb"))
+        val inner = SimElem("div", classes = setOf("E8hWLe"), parent = appRow)
+        val playLink = SimElem(
+            "a",
+            classes = setOf("tNxQIb", "ynAwRc", "nEWj3b"),
+            attrs = mapOf("href" to "https://play.google.com/store/apps/details/Google_Go?id=com.google.android.apps.searchlite&hl=vi"),
+            parent = inner,
+        )
+
+        assertTrue(isMobileSuggestionRowSim(playLink, elementHasH3 = false))
+        assertTrue(
+            isKnowledgePanelResultSim(
+                playLink,
+                elementHasH3 = false,
+                isMobileSuggestionRow = true,
+            )
+        )
+    }
+
+    @Test
+    fun `case_keyword_google google root is not excluded by Apps module elsewhere under search root`() {
+        val rootLink = SimElem(
+            "a",
+            classes = setOf("UBFage"),
+            attrs = mapOf("href" to "https://www.google.com/?hl=vi"),
+        )
+
+        assertTrue(
+            isAppsSuggestionAncestorSim(
+                listOf(
+                    "Google" to 0,
+                    "Apps" to 3,
+                )
+            )
+        )
+        assertFalse(
+            isAppsSuggestionAncestorBeforeSearchRootSim(
+                listOf(
+                    Triple("Google", 0, false),
+                    Triple("Apps", 3, true),
+                )
+            )
+        )
+        assertTrue(
+            shouldAddGoogleRootOrganicResult(
+                realUrl = "https://www.google.com/?hl=vi",
+                title = "Google",
+                link = rootLink,
+            )
+        )
+    }
+
+    @Test
+    fun `organic Play result is not excluded by Apps module guard when it is a single normal card`() {
+        val organicCard = SimElem("div", classes = setOf("MjjYud"))
+        val playLink = SimElem(
+            "a",
+            classes = setOf("zReHs"),
+            attrs = mapOf(
+                "href" to "https://play.google.com/store/apps/details?id=com.example",
+                "jsname" to "UWckNb",
+            ),
+            parent = organicCard,
+        )
+
+        assertFalse(isAppsSuggestionBlockSim("Google Play", playLinkCount = 1))
+        assertFalse(isMobileSuggestionRowSim(playLink, elementHasH3 = true))
+        assertFalse(
+            isKnowledgePanelResultSim(
+                playLink,
+                elementHasH3 = true,
+                isAppsSuggestionBlock = false,
+            )
+        )
+        assertTrue(allowedUrl("https://play.google.com/store/apps/details?id=com.example"))
     }
 
     @Test
