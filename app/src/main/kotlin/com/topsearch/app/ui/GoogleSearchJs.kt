@@ -959,6 +959,7 @@ internal object GoogleSearchJs {
 
         function norm(text) {
             text = (text || '').toLowerCase();
+            text = text.replace(/[đĐ]/g, 'd');
             try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
             return text.replace(/[^a-z0-9]+/g, ' ').trim();
         }
@@ -1288,23 +1289,59 @@ internal object GoogleSearchJs {
             return false;
         }
 
+        // Google "Địa điểm" / Places pack: skip business action cards like Gọi, Đường đi, Trang web.
+        function isPlacesPackResult(el) {
+            if (!el || !el.closest) return false;
+
+            var cur = el;
+            var depth = 0;
+            while (cur && depth++ < 12) {
+                var tag = (cur.tagName || '').toLowerCase();
+                if (tag === 'html' || tag === 'body' || tag === 'header') break;
+
+                var text = norm(cur.innerText || cur.textContent || '');
+                var hasLocalTitle = text.indexOf('dia diem') >= 0 || text.indexOf('places') >= 0;
+                var controls = cur.querySelectorAll ? cur.querySelectorAll('a[href], button, [role="button"]') : [];
+                var hasWebsite = false;
+                var hasDirections = false;
+                var hasCall = false;
+                var hasShare = false;
+
+                for (var i = 0; i < Math.min(controls.length, 36); i++) {
+                    var raw = controls[i].innerText || controls[i].textContent || controls[i].getAttribute('aria-label') || '';
+                    var label = norm(raw);
+                    if (!label || label.length > 40) continue;
+                    if (label === 'trang web' || label === 'website') hasWebsite = true;
+                    if (label === 'duong di' || label === 'directions' || label === 'chi duong') hasDirections = true;
+                    if (label === 'goi' || label === 'goi dien' || label === 'call') hasCall = true;
+                    if (label === 'chia se' || label === 'share') hasShare = true;
+                }
+
+                if (hasLocalTitle && (hasWebsite || hasDirections || hasCall)) return true;
+                if (hasDirections && (hasCall || hasWebsite || hasShare)) return true;
+
+                if (cur.id === 'rso' || cur.id === 'search' || cur.id === 'main') break;
+                cur = cur.parentElement;
+            }
+            return false;
+        }
+
         function isLocalPanelResult(el) {
-        if (!el || !el.closest) return false;
-        if (el.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"]')) return true;
+            if (!el || !el.closest) return false;
+            if (el.closest('.EyBRub, [data-kpid], [data-maindata*="LOCAL_NAV"]')) return true;
+            if (isPlacesPackResult(el)) return true;
 
-        // Local/business panel actions (Trang web, Goi dien, Duong di...) are real links
-        // but not organic top results, so skip them without touching normal result cards.
-        var localAction = el.closest('.P6Deab, [data-phone-number], [data-url*="maps.google"], a[href*="/maps/"], a[href*="maps.google."]');
-        if (!localAction) return false;
+            var localAction = el.closest('.P6Deab, [data-phone-number], [data-url*="maps.google"], a[href*="/maps/"], a[href*="maps.google."]');
+            if (!localAction) return false;
 
-        var label = norm(localAction.innerText || localAction.textContent || localAction.getAttribute('aria-label') || '');
-        return label === 'trang web' ||
-            label === 'goi dien' ||
-            label === 'duong di' ||
-            label === 'chia se' ||
-            label === 'luu' ||
-            !!localAction.closest('[role="dialog"], c-wiz, .MjjYud');
-       }
+            var label = norm(localAction.innerText || localAction.textContent || localAction.getAttribute('aria-label') || '');
+            return label === 'trang web' ||
+                label === 'goi dien' ||
+                label === 'duong di' ||
+                label === 'chia se' ||
+                label === 'luu' ||
+                !!localAction.closest('[role="dialog"], c-wiz, .MjjYud');
+        }
 
         function isHiddenResult(el) {
             if (!el || !el.closest) return false;
