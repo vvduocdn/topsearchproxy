@@ -204,8 +204,12 @@ class SearchService : Service() {
                 withTimeoutOrNull(90_000L) {
                     Log.d(TAG, "CALLBACK reqId=$requestId keyword='${req.keyword}' publicIp=$publicIp totalParsed=$totalCount checkedAt=$checkedAt")
                     Log.d(TAG, "  results=${results.size} screenshots=${screenshotPaths.size}")
-                    if (screenshotPaths.isEmpty() && results.isEmpty()) {
-                        failSubmit(requestId, req.keyword, "Submit fail: thieu ca anh lan ket qua")
+                    if (screenshotPaths.isEmpty()) {
+                        failSubmit(requestId, req.keyword, "Submit fail: thieu anh")
+                        return@withTimeoutOrNull
+                    }
+                    if (results.isEmpty()) {
+                        failSubmit(requestId, req.keyword, "Submit fail: thieu ket qua")
                         return@withTimeoutOrNull
                     }
                     if (BuildConfig.DEBUG) {
@@ -221,6 +225,11 @@ class SearchService : Service() {
                         return@withTimeoutOrNull
                     }
                     val toSubmit = if (totalCount < 10) validResults else validResults.take(10)
+                    val duplicateReason = duplicateTopReason(toSubmit)
+                    if (duplicateReason != null) {
+                        failSubmit(requestId, req.keyword, duplicateReason)
+                        return@withTimeoutOrNull
+                    }
 
                     val imageUrls = mutableListOf<String>()
                     val message   = TelegramUploader.buildResultMessage(req.keyword, toSubmit)
@@ -234,6 +243,10 @@ class SearchService : Service() {
                         } else {
                             Log.w(TAG, "  upload[$i] FAILED path=$path")
                         }
+                    }
+                    if (imageUrls.isEmpty()) {
+                        failSubmit(requestId, req.keyword, "Submit fail: upload anh loi")
+                        return@withTimeoutOrNull
                     }
                     if (message.isNotBlank()) {
                         if (imageUrls.isNotEmpty()) {
@@ -277,6 +290,35 @@ class SearchService : Service() {
         SearchBridge.emitSubmitFailure(requestId, reason)
         showNotif(reason)
     }
+
+    private fun duplicateTopReason(items: List<SearchResult>): String? {
+        val topItems = items.take(10)
+        if (topItems.size < 5) return null
+
+        val counts = topItems
+            .map { normalizeDomain(it.domain) }
+            .filter { it.isNotBlank() }
+            .groupingBy { it }
+            .eachCount()
+        val worst = counts.maxByOrNull { it.value } ?: return null
+
+        val duplicateLimit = if (topItems.size >= 8) 7 else topItems.size
+        if (worst.value >= duplicateLimit) {
+            return "Submit fail: top trung domain ${worst.key} ${worst.value}/${topItems.size}"
+        }
+        if (topItems.size >= 8 && counts.size <= 2 && worst.value >= 5) {
+            return "Submit fail: top lap bat thuong ${worst.key} ${worst.value}/${topItems.size}"
+        }
+        return null
+    }
+
+    private fun normalizeDomain(domain: String): String =
+        domain.trim()
+            .lowercase()
+            .removePrefix("http://")
+            .removePrefix("https://")
+            .substringBefore("/")
+            .removePrefix("www.")
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
