@@ -171,8 +171,7 @@ class SignalRClient(
             when (json.optInt("type")) {
                 1 -> handleInvocation(json)
                 6 -> {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Ping → Pong")
-                    ws?.send("""{"type":6}$RS""")
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Server Ping (no response needed)")
                 }
             }
         } catch (e: Exception) {

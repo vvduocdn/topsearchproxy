@@ -38,8 +38,8 @@ class SearchService : Service() {
     private val enqueueMutex = Mutex()
 
     // Shared across reconnects — avoids spawning a new thread pool every cycle.
+    // No pingInterval: SignalR type=6 every 15s (client-initiated) is sufficient for keepalive.
     private val http = OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)   // long-lived connection, no read timeout
         .build()
 
@@ -118,6 +118,7 @@ class SearchService : Service() {
 
             // Suspend until onDisconnected fires (or scope is cancelled → CancellationException).
             gone.await()
+            client.disconnect()   // cancel ping coroutine scope; ws already closed at this point
 
             activeClient = null
             SearchBridge.isConnected.value = false
