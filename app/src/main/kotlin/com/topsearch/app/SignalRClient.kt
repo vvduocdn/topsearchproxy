@@ -116,9 +116,7 @@ class SignalRClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            if (BuildConfig.DEBUG) {
-                Log.d(TAG, "onMessage len=${text.length} preview=${text.take(120).replace(RS.toString(), "<RS>")}")
-            }
+            Log.d(TAG, "onMessage len=${text.length} preview=${text.take(120).replace(RS.toString(), "<RS>")}")
             text.split(RS).filter { it.isNotBlank() }.forEach(::handleFrame)
         }
 
@@ -154,6 +152,14 @@ class SignalRClient(
                 }
                 handshakeDone = true
                 Log.d(TAG, "Handshake OK")
+                // Notify server this connection is ready to receive keywords
+                val registerMsg = JSONObject().apply {
+                    put("type",      1)
+                    put("target",    "CheckTestKeywords")
+                    put("arguments", JSONArray())
+                }.toString() + RS
+                ws?.send(registerMsg)
+                Log.d(TAG, "Sent CheckTestKeywords register to server")
                 // Client-initiated SignalR pings every 15 s — server closes if it hears nothing.
                 scope.launch {
                     while (isActive) {
@@ -181,13 +187,14 @@ class SignalRClient(
 
     private fun handleInvocation(json: JSONObject) {
         when (val target = json.optString("target")) {
-            "CheckKeywords" -> handleCheckKeywords(json)
-            "CheckKeyword"  -> handleCheckKeyword(json)
-            else            -> Log.w(TAG, "Unknown invocation target: $target")
+            "CheckKeywords"     -> handleCheckKeywords(json, isTest = false)
+            "CheckKeyword"      -> handleCheckKeyword(json)
+            "CheckTestKeywords" -> handleCheckKeywords(json, isTest = false)
+            else                -> Log.w(TAG, "Unknown invocation target: $target")
         }
     }
 
-    private fun handleCheckKeywords(json: JSONObject) {
+    private fun handleCheckKeywords(json: JSONObject, isTest: Boolean = false) {
         val args  = json.optJSONArray("arguments") ?: return
         val arr   = args.optJSONArray(0)           ?: return
         val batch = mutableListOf<SearchBridge.SocketRequest>()
@@ -198,14 +205,14 @@ class SignalRClient(
             val proxy     = item.optString("proxy")
             val country   = item.optInt("country", 1)
             if (keyword.isBlank() || requestId.isBlank()) continue
-            batch += SearchBridge.SocketRequest(requestId, keyword, proxy, country)
+            batch += SearchBridge.SocketRequest(requestId, keyword, proxy, country, isTest)
         }
         if (batch.isEmpty()) return
 
-        Log.d(TAG, "CheckKeywords: ${batch.size} item(s)")
+        Log.d(TAG, "${if (isTest) "CheckTestKeywords" else "CheckKeywords"}: ${batch.size} item(s)")
         if (BuildConfig.DEBUG) {
             batch.forEachIndexed { i, r ->
-                Log.d(TAG, "  [$i] kw=\"${r.keyword}\" proxy=${r.proxy} country=${r.country} reqId=${r.requestId}")
+                Log.d(TAG, "  [$i] kw=\"${r.keyword}\" proxy=${r.proxy} country=${r.country} reqId=${r.requestId} isTest=$isTest")
             }
         }
         onBatch(batch)
