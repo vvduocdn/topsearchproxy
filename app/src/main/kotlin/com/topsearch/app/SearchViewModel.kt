@@ -170,7 +170,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         _socketInfo.value = "Đang xử lý: \"$kw\"$queueSuffix"
 
         val proxyIp = if (effectiveProxy.isNotBlank()) {
-            withTimeoutOrNull(12_000L) {
+            withTimeoutOrNull(IP_RESOLVE_TOTAL_TIMEOUT_MS) {
                 try {
                     resolveIpViaProxy(effectiveProxy)
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -180,7 +180,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                     ""
                 }
             } ?: run {
-                Log.w("TopSearch", "resolveIpViaProxy timeout (12s)")
+                Log.w("TopSearch", "resolveIpViaProxy timeout (${IP_RESOLVE_TOTAL_TIMEOUT_MS / 1000}s)")
                 ""
             }
         } else ""
@@ -321,7 +321,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
             val proxyIp = if (proxyPick.isNotBlank()) {
                 Log.d("TopSearch", "Proxy chọn cho $cityLabel → ${proxyPick.substringBefore(":")}")
-                withTimeoutOrNull(4000L) { resolveIpViaProxy(proxyPick) } ?: ""
+                withTimeoutOrNull(IP_RESOLVE_TOTAL_TIMEOUT_MS) { resolveIpViaProxy(proxyPick) } ?: ""
             } else ""
 
             _state.value = SearchState.WebCapturing(
@@ -688,36 +688,76 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
     companion object {
         const val COUNTDOWN_SEC = 15
+        private const val IP_RESOLVE_TOTAL_TIMEOUT_MS = 35_000L
+        private const val IP_PROVIDER_TIMEOUT_SEC = 4L
+        private val IP_SERVICES: List<Pair<String, (String) -> String>> = listOf(
+            "https://api64.ipify.org?format=json" to { body -> JSONObject(body).optString("ip", "") },
+            "https://api.ipify.org?format=json" to { body -> JSONObject(body).optString("ip", "") },
+            "https://api.my-ip.io/v2/ip.json" to { body -> JSONObject(body).optString("ip", "") },
+            "https://ipinfo.io/json" to { body -> JSONObject(body).optString("ip", "") },
+        )
 
-        suspend fun resolveIpViaProxy(proxyHostPort: String): String = withContext(Dispatchers.IO) {
-            try {
-                val info = ProxyHelper.parse(proxyHostPort) ?: run {
-                    Log.w("TopSearch", "resolveIpViaProxy: invalid proxy format '$proxyHostPort'")
-                    return@withContext ""
+suspend fun resolveIpViaProxy(
+    proxyHostPort: String,
+    retries: Int = 2,
+): String = withContext(Dispatchers.IO) {
+    val info = ProxyHelper.parse(proxyHostPort) ?: run {
+        Log.w("TopSearch", "resolveIpViaProxy: invalid proxy format '$proxyHostPort'")
+        return@withContext ""
+    }
+
+    val credential = if (info.requiresAuth) Credentials.basic(info.user, info.pass) else null
+
+    val client = OkHttpClient.Builder()
+        .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(info.host, info.port)))
+        .connectTimeout(IP_PROVIDER_TIMEOUT_SEC, TimeUnit.SECONDS)
+        .readTimeout(IP_PROVIDER_TIMEOUT_SEC, TimeUnit.SECONDS)
+        .writeTimeout(IP_PROVIDER_TIMEOUT_SEC, TimeUnit.SECONDS)
+        .callTimeout(IP_PROVIDER_TIMEOUT_SEC, TimeUnit.SECONDS)
+        .apply {
+            if (credential != null) {
+                proxyAuthenticator { _, response ->
+                    // Prevent infinite auth loop
+                    if (response.request.header("Proxy-Authorization") != null) return@proxyAuthenticator null
+                    response.request.newBuilder()
+                        .header("Proxy-Authorization", credential)
+                        .build()
                 }
-                val builder = OkHttpClient.Builder()
-                    .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(info.host, info.port)))
-                    .connectTimeout(4, TimeUnit.SECONDS)
-                    .readTimeout(4, TimeUnit.SECONDS)
-                if (info.requiresAuth) {
-                    val credential = Credentials.basic(info.user, info.pass)
-                    builder.proxyAuthenticator { _, response ->
-                        response.request.newBuilder()
-                            .header("Proxy-Authorization", credential)
-                            .build()
-                    }
-                }
-                val client  = builder.build()
-                val request = Request.Builder().url("https://api64.ipify.org?format=json").build()
-                val body    = client.newCall(request).execute().use { it.body?.string()?.trim() ?: "" }
-                val ip      = org.json.JSONObject(body).optString("ip", "")
-                Log.d("TopSearch", "resolveIpViaProxy OK → $ip (proxy=${info.host}:${info.port} auth=${info.requiresAuth})")
-                ip
-            } catch (e: Exception) {
-                Log.w("TopSearch", "resolveIpViaProxy failed: ${e.message}")
-                ""
             }
         }
+        .build()
+
+    for ((url, parseIp) in IP_SERVICES) {
+        repeat(retries) { attempt ->
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0")
+                    .build()
+
+                val (ok, body) = client.newCall(request).execute().use { resp ->
+                    resp.isSuccessful to (resp.body?.string()?.trim() ?: "")
+                }
+
+                if (!ok || body.isEmpty()) {
+                    Log.w("TopSearch", "resolveIpViaProxy: HTTP error url=$url attempt=${attempt + 1}/$retries")
+                    return@repeat
+                }
+
+                val ip = parseIp(body)
+                if (ip.isNotEmpty()) {
+                    Log.d("TopSearch", "resolveIpViaProxy OK → $ip (proxy=${info.host}:${info.port}, url=$url, attempt=${attempt + 1}/$retries)")
+                    return@withContext ip
+                }
+            } catch (e: Exception) {
+                Log.w("TopSearch", "resolveIpViaProxy failed url=$url attempt=${attempt + 1}/$retries: ${e.message}")
+            }
+        }
+    }
+
+    Log.e("TopSearch", "resolveIpViaProxy: all services/retries exhausted for proxy ${info.host}:${info.port}")
+    ""
+}
 
         fun buildResultJson(keyword: String, city: String, results: List<SearchResult>): String {
             val arr = JSONArray()
