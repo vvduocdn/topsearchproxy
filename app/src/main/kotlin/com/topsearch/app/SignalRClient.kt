@@ -187,14 +187,14 @@ class SignalRClient(
 
     private fun handleInvocation(json: JSONObject) {
         when (val target = json.optString("target")) {
-            "CheckKeywords"     -> handleCheckKeywords(json, isTest = false)
+            "CheckKeywords"     -> handleCheckKeywords(json)
             "CheckKeyword"      -> handleCheckKeyword(json)
-            "CheckTestKeywords" -> handleCheckKeywords(json, isTest = false)
+            "CheckTestKeywords" -> handleCheckKeywords(json)
             else                -> Log.w(TAG, "Unknown invocation target: $target")
         }
     }
 
-    private fun handleCheckKeywords(json: JSONObject, isTest: Boolean = false) {
+    private fun handleCheckKeywords(json: JSONObject) {
         val args  = json.optJSONArray("arguments") ?: return
         val arr   = args.optJSONArray(0)           ?: return
         val batch = mutableListOf<SearchBridge.SocketRequest>()
@@ -205,14 +205,14 @@ class SignalRClient(
             val proxy     = item.optString("proxy")
             val country   = item.optInt("country", 1)
             if (keyword.isBlank() || requestId.isBlank()) continue
-            batch += SearchBridge.SocketRequest(requestId, keyword, proxy, country, isTest)
+            batch += SearchBridge.SocketRequest(requestId, keyword, proxy, country)
         }
         if (batch.isEmpty()) return
 
-        Log.d(TAG, "${if (isTest) "CheckTestKeywords" else "CheckKeywords"}: ${batch.size} item(s)")
+        Log.d(TAG, "CheckKeywords: ${batch.size} item(s)")
         if (BuildConfig.DEBUG) {
             batch.forEachIndexed { i, r ->
-                Log.d(TAG, "  [$i] kw=\"${r.keyword}\" proxy=${r.proxy} country=${r.country} reqId=${r.requestId} isTest=$isTest")
+                Log.d(TAG, "  [$i] kw=\"${r.keyword}\" proxy=${r.proxy} country=${r.country} reqId=${r.requestId}")
             }
         }
         onBatch(batch)
