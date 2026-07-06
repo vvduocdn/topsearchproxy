@@ -6,6 +6,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -68,7 +69,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
+        )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         if (!LocationHelper.hasPermission(this)) {
@@ -218,12 +221,6 @@ class MainActivity : ComponentActivity() {
                         )
                 }
 
-                if (isRecording) {
-                    CaptureOverlayBar(
-                        ip       = captureIp,
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                    )
-                }
                 } // Box
             }
         }
