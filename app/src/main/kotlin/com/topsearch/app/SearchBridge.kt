@@ -1,5 +1,6 @@
 package com.topsearch.app
 
+import android.media.projection.MediaProjection
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.ConcurrentHashMap
@@ -30,6 +31,12 @@ object SearchBridge {
     data class SubmitSuccess(
         val requestId: String,
     )
+
+    /** MediaProjection token — obtained in MainActivity after user grants screen capture */
+    @Volatile var mediaProjection: MediaProjection? = null
+
+    /** true while ScreenRecorder is actively recording */
+    val isRecording = MutableStateFlow(false)
 
     /** Trạng thái kết nối WebSocket — Service cập nhật, UI observe */
     val isConnected = MutableStateFlow(false)

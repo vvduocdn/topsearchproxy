@@ -33,8 +33,12 @@ import okhttp3.Request
 
 class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
+    private val screenRecorder = ScreenRecorder(appContext)
+
     private val _state = MutableStateFlow<SearchState>(SearchState.Idle)
     val state: StateFlow<SearchState> = _state.asStateFlow()
+
+    val isRecording: StateFlow<Boolean> = SearchBridge.isRecording
 
     /** true = bỏ qua proxy, search thẳng qua mạng điện thoại */
     private val _skipProxy = MutableStateFlow(false)
@@ -111,6 +115,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                     refreshHistory()
                 }
                 requests.forEach { batchRequests[it.requestId] = it }
+                startRecording()
             }
         }
         // Forward incoming socket requests to the sequential queue
@@ -510,6 +515,39 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         }
     }
 
+    // ── Screen recording ──────────────────────────────────────────────────────
+
+    private fun startRecording() {
+        val projection = SearchBridge.mediaProjection ?: run {
+            Log.w("TopSearch", "startRecording: no MediaProjection, skipping")
+            return
+        }
+        val started = screenRecorder.start(projection)
+        SearchBridge.isRecording.value = started
+        Log.d("TopSearch", "startRecording: started=$started")
+    }
+
+    private suspend fun stopRecordingAsync() {
+        if (!SearchBridge.isRecording.value) return
+        SearchBridge.isRecording.value = false
+        withContext(Dispatchers.IO) {
+            val path = screenRecorder.stop()
+            Log.d("TopSearch", "stopRecordingAsync: path=$path")
+        }
+    }
+
+    fun stopRecording() {
+        viewModelScope.launch { stopRecordingAsync() }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        if (SearchBridge.isRecording.value) {
+            SearchBridge.isRecording.value = false
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { screenRecorder.stop() }
+        }
+    }
+
     // ── Crash-recovery queue ──────────────────────────────────────────────────
 
     fun checkPendingQueue() {
@@ -657,7 +695,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private suspend fun retryErrorKeywords() {
         val errorItems = _keywordBatch.value
             .filter { it.status == CheckStatus.ERROR && it.retryCount < 3 && it.isAutoRetryableError() }
-        if (errorItems.isEmpty()) return
+        if (errorItems.isEmpty()) {
+            stopRecordingAsync()
+            return
+        }
         val retryReqs = errorItems.mapNotNull { batchRequests[it.requestId] }
         if (retryReqs.isEmpty()) return
         Log.d("TopSearch", "Auto-retry ${retryReqs.size} retryable ERROR keywords")

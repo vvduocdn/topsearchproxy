@@ -62,7 +62,8 @@ class SearchService : Service() {
             startForeground(
                 NOTIF_ID,
                 buildNotif("Dang ket noi..."),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
             )
         } else {
             startForeground(NOTIF_ID, buildNotif("Dang ket noi..."))

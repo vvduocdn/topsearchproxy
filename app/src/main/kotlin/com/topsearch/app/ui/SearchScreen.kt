@@ -102,6 +102,8 @@ fun SearchScreen(
     onDeleteHistoryAll:   () -> Unit                        = {},
     onDeleteHistoryDay:   (String) -> Unit                  = {},
     onTestKeyword:        (keyword: String, proxy: String) -> Unit = { _, _ -> },
+    isRecording:          Boolean                           = false,
+    onStopRecording:      () -> Unit                        = {},
     onSearch:             (keyword: String, city: VietnamCity) -> Unit,
 ) {
     val isLoading = loadingStep.isNotEmpty()
@@ -158,20 +160,22 @@ fun SearchScreen(
                 )
             } else {
                 StandbyContent(
-                    isLoading      = isLoading,
-                    loadingStep    = loadingStep,
-                    isConnected    = isConnected,
-                    socketInfo     = socketInfo,
-                    keywordBatch   = keywordBatch,
-                    keywordResults = keywordResults,
+                    isLoading        = isLoading,
+                    loadingStep      = loadingStep,
+                    isConnected      = isConnected,
+                    socketInfo       = socketInfo,
+                    keywordBatch     = keywordBatch,
+                    keywordResults   = keywordResults,
                     keywordImagePaths = keywordImagePaths,
-                    onRetryKeyword = onRetryKeyword,
-                    onTestKeyword  = onTestKeyword,
-                    onHistoryClick = {
+                    onRetryKeyword   = onRetryKeyword,
+                    onTestKeyword    = onTestKeyword,
+                    isRecording      = isRecording,
+                    onStopRecording  = onStopRecording,
+                    onHistoryClick   = {
                         onOpenHistory()
                         showHistory = true
                     },
-                    onManualClick  = { showManual = true },
+                    onManualClick    = { showManual = true },
                 )
             }
         }
@@ -191,6 +195,8 @@ private fun StandbyContent(
     keywordImagePaths: Map<String, List<String>> = emptyMap(),
     onRetryKeyword: (String) -> Unit = {},
     onTestKeyword:  (keyword: String, proxy: String) -> Unit = { _, _ -> },
+    isRecording:    Boolean  = false,
+    onStopRecording: () -> Unit = {},
     onHistoryClick: () -> Unit = {},
     onManualClick:  () -> Unit,
 ) {
@@ -239,6 +245,45 @@ private fun StandbyContent(
                 Icon(Icons.Default.History, contentDescription = "Lịch sử")
             }
             ConnectionBadge(isConnected)
+        }
+
+        AnimatedVisibility(
+            visible = isRecording,
+            enter   = expandVertically() + fadeIn(),
+            exit    = shrinkVertically() + fadeOut(),
+        ) {
+            Row(
+                modifier          = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFEF4444)),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Đang ghi màn hình",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFEF4444),
+                    )
+                }
+                TextButton(
+                    onClick = onStopRecording,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        "Dừng ghi",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFEF4444),
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.weight(0.35f))

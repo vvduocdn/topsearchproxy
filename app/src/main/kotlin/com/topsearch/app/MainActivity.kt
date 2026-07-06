@@ -1,12 +1,15 @@
 ﻿package com.topsearch.app
 
 import android.Manifest
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,17 +46,28 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: SearchViewModel by viewModels()
 
-    // Xin quyền Location khi app mở lần đầu.
     private val locationPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {}
+
+    private val projectionLauncher = registerForActivityResult(StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            val pm = getSystemService(MediaProjectionManager::class.java)
+            val projection = pm.getMediaProjection(result.resultCode, result.data!!)
+            projection.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    SearchBridge.mediaProjection = null
+                }
+            }, null)
+            SearchBridge.mediaProjection = projection
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // Xin quyền GPS ngay khi mở app.
         if (!LocationHelper.hasPermission(this)) {
             locationPermLauncher.launch(
                 arrayOf(
@@ -65,6 +79,12 @@ class MainActivity : ComponentActivity() {
 
         // Khởi động service WebSocket để nhận keyword từ server.
         SearchService.start(this)
+
+        // Xin quyền ghi màn hình — cần trước khi batch đầu tiên được nhận.
+        if (SearchBridge.mediaProjection == null) {
+            val pm = getSystemService(MediaProjectionManager::class.java)
+            projectionLauncher.launch(pm.createScreenCaptureIntent())
+        }
         viewModel.checkPendingQueue()
 
         setContent {
@@ -73,6 +93,7 @@ class MainActivity : ComponentActivity() {
                 val skipProxy          by viewModel.skipProxy.collectAsState()
                 val socketInfo         by viewModel.socketInfo.collectAsState()
                 val isConnected        by viewModel.isConnected.collectAsState()
+                val isRecording        by viewModel.isRecording.collectAsState()
                 val keywordBatch       by viewModel.keywordBatch.collectAsState()
                 val keywordResults     by viewModel.keywordResults.collectAsState()
                 val keywordImagePaths  by viewModel.keywordImagePaths.collectAsState()
@@ -92,6 +113,7 @@ class MainActivity : ComponentActivity() {
                             skipProxy         = skipProxy,
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
+                            isRecording       = isRecording,
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
                             keywordImagePaths = keywordImagePaths,
@@ -102,6 +124,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteHistoryAll = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay = viewModel::deleteHistoryDay,
                             onTestKeyword     = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
+                            onStopRecording   = viewModel::stopRecording,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
 
@@ -129,6 +152,7 @@ class MainActivity : ComponentActivity() {
                             skipProxy         = skipProxy,
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
+                            isRecording       = isRecording,
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
                             keywordImagePaths = keywordImagePaths,
@@ -139,6 +163,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteHistoryAll = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay = viewModel::deleteHistoryDay,
                             onTestKeyword     = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
+                            onStopRecording   = viewModel::stopRecording,
                             onSearch          = { _, _ -> },
                         )
 
@@ -147,6 +172,7 @@ class MainActivity : ComponentActivity() {
                             skipProxy             = skipProxy,
                             socketInfo            = socketInfo,
                             isConnected           = isConnected,
+                            isRecording           = isRecording,
                             keywordBatch          = keywordBatch,
                             keywordResults        = keywordResults,
                             keywordImagePaths     = keywordImagePaths,
@@ -160,6 +186,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteHistoryAll    = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay    = viewModel::deleteHistoryDay,
                             onTestKeyword         = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
+                            onStopRecording       = viewModel::stopRecording,
                             onSearch              = { kw, city -> viewModel.startSearch(kw, city) },
                         )
 
@@ -170,6 +197,7 @@ class MainActivity : ComponentActivity() {
                             skipProxy         = skipProxy,
                             socketInfo        = socketInfo,
                             isConnected       = isConnected,
+                            isRecording       = isRecording,
                             keywordBatch      = keywordBatch,
                             keywordResults    = keywordResults,
                             keywordImagePaths = keywordImagePaths,
@@ -180,6 +208,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteHistoryAll = viewModel::deleteHistoryAll,
                             onDeleteHistoryDay = viewModel::deleteHistoryDay,
                             onTestKeyword     = { kw, proxy -> viewModel.addTestKeyword(kw, proxy) },
+                            onStopRecording   = viewModel::stopRecording,
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
                 }
