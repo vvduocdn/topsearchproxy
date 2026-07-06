@@ -221,6 +221,12 @@ class MainActivity : ComponentActivity() {
                         )
                 }
 
+                if (isRecording) {
+                    CaptureOverlayBar(
+                        ip       = captureIp,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+                }
                 } // Box
             }
         }
