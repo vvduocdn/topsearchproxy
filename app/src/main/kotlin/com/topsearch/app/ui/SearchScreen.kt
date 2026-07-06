@@ -1037,6 +1037,15 @@ private fun KeywordBatchRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (item.notes.isNotBlank()) {
+                Text(
+                    text = "⚠ ${item.notes}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFF59E0B),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         if (item.status == CheckStatus.ERROR) {
             Spacer(Modifier.width(8.dp))

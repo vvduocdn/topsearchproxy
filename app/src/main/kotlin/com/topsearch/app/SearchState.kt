@@ -9,6 +9,7 @@ data class KeywordBatchItem(
     val  retryCount:   Int         = 0,
     val errorMessage: String      = "",
     val completedAt:  String      = "",
+    val notes:        String      = "",
 )
 
 data class SearchResult(

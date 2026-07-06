@@ -77,6 +77,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     // Lookup requestId → SocketRequest để auto-retry sau khi batch kết thúc
     private val batchRequests = mutableMapOf<String, SearchBridge.SocketRequest>()
 
+    // requestId có proxy nhưng không resolve được IP → gắn note "Thiếu ip" khi thành công
+    private val missingIpRequestIds = mutableSetOf<String>()
+
     private var captureSeq = 0
 
     // Kết quả đã check theo requestId — user nhấn keyword row để xem lại
@@ -132,6 +135,9 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         viewModelScope.launch {
             SearchBridge.submitSuccess.collect { success ->
                 updateBatchStatus(success.requestId, CheckStatus.DONE)
+                if (missingIpRequestIds.remove(success.requestId)) {
+                    addNoteToBatchItem(success.requestId, "Thiếu ip")
+                }
                 _socketInfo.value = "Submit thành công"
                 Log.d("TopSearch", "Submit success reqId=${success.requestId}")
             }
@@ -185,6 +191,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
             }
         } else ""
 
+        if (effectiveProxy.isNotBlank() && proxyIp.isEmpty()) {
+            missingIpRequestIds += req.requestId
+        }
+
         val googleUrl = when (req.country) {
             2    -> "https://www.google.co.th/?hl=th&gl=th&pws=0"
             else -> "https://www.google.com.vn/?hl=vi&gl=vn&pws=0"
@@ -220,6 +230,14 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private fun signalDone() {
         currentDone?.complete(Unit)
         currentDone = null
+    }
+
+    private fun addNoteToBatchItem(requestId: String, note: String) {
+        _keywordBatch.update { list ->
+            list.map {
+                if (it.requestId == requestId) it.copy(notes = note) else it
+            }
+        }
     }
 
     private fun updateBatchStatus(requestId: String, status: CheckStatus, errorMessage: String = "") {
