@@ -15,9 +15,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.topsearch.app.ui.CaptureOverlayBar
 import com.topsearch.app.ui.SearchScreen
 import com.topsearch.app.ui.WebCaptureScreen
 import com.topsearch.app.ui.theme.TopSearchTheme
@@ -94,12 +97,14 @@ class MainActivity : ComponentActivity() {
                 val socketInfo         by viewModel.socketInfo.collectAsState()
                 val isConnected        by viewModel.isConnected.collectAsState()
                 val isRecording        by viewModel.isRecording.collectAsState()
+                val captureIp          by viewModel.captureIp.collectAsState()
                 val keywordBatch       by viewModel.keywordBatch.collectAsState()
                 val keywordResults     by viewModel.keywordResults.collectAsState()
                 val keywordImagePaths  by viewModel.keywordImagePaths.collectAsState()
                 val historyEntries     by viewModel.historyEntries.collectAsState()
                 val pendingQueuePrompt by viewModel.pendingQueuePrompt.collectAsState()
 
+                Box(Modifier.fillMaxSize()) {
                 if (pendingQueuePrompt) {
                     PendingQueueDialog(
                         onResume = { viewModel.resumePendingQueue() },
@@ -212,6 +217,14 @@ class MainActivity : ComponentActivity() {
                             onSearch          = { kw, city -> viewModel.startSearch(kw, city) },
                         )
                 }
+
+                if (isRecording) {
+                    CaptureOverlayBar(
+                        ip       = captureIp,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+                }
+                } // Box
             }
         }
     }

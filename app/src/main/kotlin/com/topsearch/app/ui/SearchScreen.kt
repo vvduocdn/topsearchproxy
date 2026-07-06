@@ -1308,3 +1308,45 @@ private fun ConnectionBadge(isConnected: Boolean) {
         )
     }
 }
+
+// ── Capture overlay bar ──────────────────────────────────────────────────────────
+
+@Composable
+fun CaptureOverlayBar(ip: String, modifier: Modifier = Modifier) {
+    var timeText by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        val fmt = java.text.SimpleDateFormat("HH:mm dd/MM/yyyy", java.util.Locale.getDefault())
+        while (true) {
+            timeText = fmt.format(java.util.Date())
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+
+    val maskedIp = remember(ip) {
+        val parts = ip.split(".")
+        if (parts.size == 4) "${parts[0]}.***.${parts[3]}" else ip
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Color(0xCC000000L))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text       = if (maskedIp.isNotBlank()) "IP: $maskedIp" else "",
+            color      = Color.White,
+            fontSize   = 12.sp,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+        )
+        Text(
+            text       = timeText,
+            color      = Color.White,
+            fontSize   = 12.sp,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+        )
+    }
+}

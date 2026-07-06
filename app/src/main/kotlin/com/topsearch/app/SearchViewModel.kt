@@ -40,6 +40,10 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
 
     val isRecording: StateFlow<Boolean> = SearchBridge.isRecording
 
+    /** IP proxy đang dùng trong batch — dùng cho overlay quay video */
+    private val _captureIp = MutableStateFlow("")
+    val captureIp: StateFlow<String> = _captureIp.asStateFlow()
+
     /** true = bỏ qua proxy, search thẳng qua mạng điện thoại */
     private val _skipProxy = MutableStateFlow(false)
     val skipProxy: StateFlow<Boolean> = _skipProxy.asStateFlow()
@@ -208,6 +212,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val done = CompletableDeferred<Unit>()
         currentDone = done
 
+        if (proxyIp.isNotBlank()) _captureIp.value = proxyIp
         _state.value = SearchState.WebCapturing(
             keyword    = kw,
             city       = "",
@@ -347,6 +352,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                 withTimeoutOrNull(IP_RESOLVE_TOTAL_TIMEOUT_MS) { resolveIpViaProxy(proxyPick) } ?: ""
             } else ""
 
+            if (proxyIp.isNotBlank()) _captureIp.value = proxyIp
             _state.value = SearchState.WebCapturing(
                 keyword    = kw,
                 city       = cityLabel,
