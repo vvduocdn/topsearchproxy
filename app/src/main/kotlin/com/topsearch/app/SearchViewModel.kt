@@ -533,6 +533,11 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         withContext(Dispatchers.IO) {
             val path = screenRecorder.stop()
             Log.d("TopSearch", "stopRecordingAsync: path=$path")
+            if (path != null) {
+                Log.d("TopSearch", "stopRecordingAsync: uploading video to Telegram")
+                val ok = TelegramUploader.uploadVideo(path)
+                Log.d("TopSearch", "stopRecordingAsync: upload ok=$ok")
+            }
         }
     }
 

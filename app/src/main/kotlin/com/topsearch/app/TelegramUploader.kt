@@ -157,6 +157,53 @@ object TelegramUploader {
         return json.getJSONObject("result").getJSONObject("document").getString("file_id")
     }
 
+    suspend fun uploadVideo(filePath: String, caption: String = ""): Boolean {
+        if (filePath.isBlank()) return false
+        val file = File(filePath)
+        if (!file.exists()) { Log.e(TAG, "Video not found: $filePath"); return false }
+        Log.d(TAG, "uploadVideo: ${file.name}  size=${file.length()}B")
+        return uploadMutex.withLock {
+            val ok = doSendVideo(file, caption)
+            if (!ok) {
+                Log.w(TAG, "uploadVideo retry after 5s: ${file.name}")
+                kotlinx.coroutines.delay(5_000)
+                doSendVideo(file, caption)
+            } else ok
+        }
+    }
+
+    private fun doSendVideo(file: File, caption: String): Boolean {
+        return try {
+            val boundary = "TgBound${System.currentTimeMillis()}"
+            val conn = (URL("$BOT_BASE/sendVideo").openConnection() as HttpURLConnection).apply {
+                requestMethod  = "POST"
+                doOutput       = true
+                connectTimeout = 15_000
+                readTimeout    = 300_000  // 5 min — video có thể lớn
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            }
+            conn.outputStream.use { out ->
+                out.write("--$boundary\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n$CHAT_ID\r\n".toByteArray())
+                if (caption.isNotBlank()) {
+                    out.write("--$boundary\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n$caption\r\n".toByteArray())
+                }
+                out.write("--$boundary\r\nContent-Disposition: form-data; name=\"video\"; filename=\"${file.name}\"\r\nContent-Type: video/mp4\r\n\r\n".toByteArray())
+                file.inputStream().use { it.copyTo(out) }
+                out.write("\r\n--$boundary--\r\n".toByteArray())
+            }
+            val code = conn.responseCode
+            val body = if (code == 200) conn.inputStream.bufferedReader().readText()
+                       else conn.errorStream?.bufferedReader()?.readText() ?: ""
+            Log.d(TAG, "doSendVideo HTTP $code body_len=${body.length}")
+            val json = JSONObject(body)
+            if (!json.optBoolean("ok")) { Log.e(TAG, "doSendVideo($code): $body"); false }
+            else true
+        } catch (e: Exception) {
+            Log.e(TAG, "doSendVideo failed: ${e.message}")
+            false
+        }
+    }
+
     private fun getFilePath(fileId: String): String? {
         val conn = (URL("$BOT_BASE/getFile?file_id=$fileId").openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
