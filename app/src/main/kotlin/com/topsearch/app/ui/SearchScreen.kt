@@ -1331,7 +1331,7 @@ fun CaptureOverlayBar(ip: String, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color(0xCC000000L))
+            .background(Color(0xCC000000.toInt()))
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
