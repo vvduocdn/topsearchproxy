@@ -54,7 +54,7 @@ import kotlin.coroutines.resume
 private const val TAG = "WebCapture"
 private const val COUNTDOWN_SEC = 6
 private const val MAX_CAPTURE_TILES = 80
-private const val MAX_CAPTURE_CHUNK_HEIGHT_PX = 24_000
+private const val MAX_CAPTURE_CHUNK_HEIGHT_PX = 30_000
 private const val CAPTURE_SETTLE_MS = 650L
 private const val PIXEL_COPY_RETRIES = 3
 private const val SCREENSHOT_JPEG_QUALITY = 90
@@ -274,7 +274,9 @@ fun WebCaptureScreen(
         Log.d(TAG, "PARSED HEADING ORDER ${jsResults.size} results")
         logParsedTopResults(jsResults)
 
-        wv.evaluateJavascript("window.scrollTo({top:0,behavior:'instant'});", null)
+        delay(3000)
+        wv.evaluateJavascript("window.scrollTo({top:0,behavior:'smooth'});", null)
+        delay(3000)
         val finalResults = jsResults.take(10)
         Log.d(TAG, "onCaptureDone checkedAt=${captureOutput.checkedAt} paths=${captureOutput.paths.size} results=${finalResults.size}")
         onCaptureDone(captureOutput.paths, finalResults, rawCity, captureOutput.checkedAt)
@@ -642,6 +644,14 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
             "part_%02d".format(chunkIndex)
         }
 
+        val effectiveBottom = if (contentBottom > chunkTop)
+            (contentBottom - chunkTop).coerceAtMost(chunkBitmap.height)
+        else
+            chunkBitmap.height
+
+        // Trim white rows TRƯỚC khi vẽ overlay — overlay sẽ nằm sát nội dung thực, không có white gap
+        val trimmedBottom = if (contentBottom > 0) trimBottomWhiteRows(chunkBitmap, effectiveBottom) else effectiveBottom
+
         // Vẽ overlay time + IP trên chunk đầu tiên — đây là chunk được upload.
         // Trang dài tạo nhiều part nhưng SearchService chỉ upload part_01.
         if (chunkIndex == 1) {
@@ -663,25 +673,25 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
             val lines = listOfNotNull(line1, line2)
             val boxW  = (lines.maxOf { textPaint.measureText(it) } + pad * 2).toInt()
             val boxH  = lineH * lines.size + pad
-            // Vẽ tại đáy nội dung thực tế, không phải đáy bitmap được cấp phát
-            val effectiveBottom = if (contentBottom > chunkTop)
-                (contentBottom - chunkTop).coerceAtMost(chunkBitmap.height)
-            else
-                chunkBitmap.height
             val boxL  = (chunkBitmap.width - boxW).toFloat()
-            val boxT  = (effectiveBottom - boxH).toFloat().coerceAtLeast(0f)
-            overlayCanvas.drawRect(boxL, boxT, chunkBitmap.width.toFloat(), effectiveBottom.toFloat(), bgPaint)
+            val boxT  = (trimmedBottom - boxH).toFloat().coerceAtLeast(0f)
+            overlayCanvas.drawRect(boxL, boxT, chunkBitmap.width.toFloat(), trimmedBottom.toFloat(), bgPaint)
             lines.forEachIndexed { i, text ->
                 overlayCanvas.drawText(text, boxL + pad, boxT + pad + textPaint.textSize + lineH * i, textPaint)
             }
         }
 
+        val bitmapToSave = if (trimmedBottom < chunkBitmap.height) {
+            Bitmap.createBitmap(chunkBitmap, 0, 0, chunkBitmap.width, trimmedBottom)
+        } else chunkBitmap
+
         val file = File(base, "topsearch_${ts}_$suffix.jpg")
         FileOutputStream(file).use {
-            chunkBitmap.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_JPEG_QUALITY, it)
+            bitmapToSave.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_JPEG_QUALITY, it)
         }
+        if (bitmapToSave !== chunkBitmap) bitmapToSave.recycle()
         paths += file.absolutePath
-        Log.d(TAG, "Saved screenshot chunk ${file.name} top=$chunkTop height=${chunkBitmap.height}")
+        Log.d(TAG, "Saved screenshot chunk ${file.name} top=$chunkTop trimmedH=$trimmedBottom")
         chunkHasPixels = false
         chunkIndex++
     }
@@ -798,6 +808,24 @@ private fun createChunkBitmap(width: Int, totalHeight: Int, chunkTop: Int): Bitm
     return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
         Canvas(it).drawColor(android.graphics.Color.WHITE)
     }
+}
+
+// Scan từ dưới lên, trả về chiều cao thực sau khi bỏ các hàng pixel trắng thuần cuối trang.
+// Dùng để cắt phần footer trắng của Google ra khỏi ảnh chụp.
+private fun trimBottomWhiteRows(bmp: Bitmap, maxH: Int): Int {
+    val w = bmp.width
+    val step = (w / 20).coerceAtLeast(1)
+    val rowBuf = IntArray(w)
+    for (y in maxH - 1 downTo 0) {
+        bmp.getPixels(rowBuf, 0, w, 0, y, w, 1)
+        for (x in 0 until w step step) {
+            val px = rowBuf[x]
+            if (((px shr 16) and 0xFF) < 245 || ((px shr 8) and 0xFF) < 245 || (px and 0xFF) < 245) {
+                return y + 1
+            }
+        }
+    }
+    return maxH
 }
 
 private suspend fun readPageMetrics(webView: WebView, fallbackViewHeightPx: Int): Pair<Int, Int> =
