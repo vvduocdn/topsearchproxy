@@ -89,6 +89,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     private val missingIpRequestIds = mutableSetOf<String>()
 
     private var captureSeq = 0
+    private val keywordStartMsMap = mutableMapOf<String, Long>()
 
     // Kết quả đã check theo requestId — user nhấn keyword row để xem lại
     private val _keywordResults = MutableStateFlow<Map<String, List<SearchResult>>>(emptyMap())
@@ -176,6 +177,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
         val kw = req.keyword.trim().ifBlank { return }
         socketDoneJob?.cancel()
         socketRequestId = req.requestId
+        keywordStartMsMap[req.requestId] = System.currentTimeMillis()
         updateBatchStatus(req.requestId, CheckStatus.IN_PROGRESS)
 
         val effectiveProxy = if (_skipProxy.value) "" else req.proxy
@@ -251,10 +253,17 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
     }
 
     private fun updateBatchStatus(requestId: String, status: CheckStatus, errorMessage: String = "") {
-        val completedAt = if (status == CheckStatus.DONE || status == CheckStatus.ERROR) {
+        val isTerminal = status == CheckStatus.DONE || status == CheckStatus.ERROR
+        val completedAt = if (isTerminal) {
             SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         } else {
             ""
+        }
+        val startMs = if (isTerminal) keywordStartMsMap.remove(requestId) else null
+        val elapsedSec = if (startMs != null && startMs > 0L) {
+            ((System.currentTimeMillis() - startMs) / 1000).toInt()
+        } else {
+            0
         }
         var updatedItem: KeywordBatchItem? = null
         _keywordBatch.update { list ->
@@ -264,6 +273,7 @@ class SearchViewModel(appContext: Application) : AndroidViewModel(appContext) {
                         status = status,
                         errorMessage = if (status == CheckStatus.ERROR) errorMessage else "",
                         completedAt = completedAt,
+                        elapsedSec = if (isTerminal) elapsedSec else it.elapsedSec,
                     ).also { updatedItem = it }
                 } else {
                     it

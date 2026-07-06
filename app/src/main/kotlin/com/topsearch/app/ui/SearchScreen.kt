@@ -1072,10 +1072,10 @@ private fun KeywordBatchRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = if (item.completedAt.isNotBlank()) {
-                    "$subtitle · ${item.completedAt}"
-                } else {
-                    subtitle
+                text = buildString {
+                    append(subtitle)
+                    if (item.completedAt.isNotBlank()) append(" · ${item.completedAt}")
+                    if (item.elapsedSec > 0) append(" · ${item.elapsedSec}s")
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = contentColor.copy(alpha = 0.72f),
@@ -1316,7 +1316,7 @@ fun CaptureOverlayBar(ip: String, modifier: Modifier = Modifier) {
     var timeText by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        val fmt = java.text.SimpleDateFormat("HH:mm dd/MM/yyyy", java.util.Locale.getDefault())
+        val fmt = java.text.SimpleDateFormat("HH:mm:ss dd/MM/yyyy", java.util.Locale.getDefault())
         while (true) {
             timeText = fmt.format(java.util.Date())
             kotlinx.coroutines.delay(1_000)

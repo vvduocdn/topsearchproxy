@@ -10,6 +10,7 @@ data class KeywordBatchItem(
     val errorMessage: String      = "",
     val completedAt:  String      = "",
     val notes:        String      = "",
+    val elapsedSec:   Int         = 0,
 )
 
 data class SearchResult(
