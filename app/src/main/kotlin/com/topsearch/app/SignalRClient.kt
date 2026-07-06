@@ -152,14 +152,6 @@ class SignalRClient(
                 }
                 handshakeDone = true
                 Log.d(TAG, "Handshake OK")
-                // Notify server this connection is ready to receive keywords
-                val registerMsg = JSONObject().apply {
-                    put("type",      1)
-                    put("target",    "CheckTestKeywords")
-                    put("arguments", JSONArray())
-                }.toString() + RS
-                ws?.send(registerMsg)
-                Log.d(TAG, "Sent CheckTestKeywords register to server")
                 // Client-initiated SignalR pings every 15 s — server closes if it hears nothing.
                 scope.launch {
                     while (isActive) {

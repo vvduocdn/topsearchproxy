@@ -634,7 +634,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
     var chunkIndex = 1
 
     // Lưu chunk hiện tại: trang thường 1 file, trang quá cao thì nhiều part.
-    fun saveChunkIfNeeded(force: Boolean = false, isLast: Boolean = false, contentBottom: Int = 0) {
+    fun saveChunkIfNeeded(force: Boolean = false, contentBottom: Int = 0) {
         if (!chunkHasPixels && !force) return
         val suffix = if (chunkIndex == 1 && totalPhysH <= MAX_CAPTURE_CHUNK_HEIGHT_PX) {
             "full"
@@ -642,8 +642,9 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
             "part_%02d".format(chunkIndex)
         }
 
-        // Vẽ overlay time + IP chỉ trên chunk cuối (footer của trang)
-        if (isLast) {
+        // Vẽ overlay time + IP trên chunk đầu tiên — đây là chunk được upload.
+        // Trang dài tạo nhiều part nhưng SearchService chỉ upload part_01.
+        if (chunkIndex == 1) {
             val overlayCanvas = Canvas(chunkBitmap)
             val line1 = "Time: $tsDisplay"
             val line2: String? = if (publicIp.isNotBlank()) {
@@ -782,7 +783,7 @@ private suspend fun captureWebViewTiles(webView: WebView, dir: File?, publicIp: 
     }
 
     tileBmp.recycle()
-    saveChunkIfNeeded(force = paths.isEmpty(), isLast = true, contentBottom = capturedBottom)
+    saveChunkIfNeeded(force = paths.isEmpty(), contentBottom = capturedBottom)
     chunkBitmap.recycle()
     setCaptureOverlaysHidden(webView, hide = false)
 
