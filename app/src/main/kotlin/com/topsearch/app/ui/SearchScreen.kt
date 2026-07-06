@@ -1323,11 +1323,6 @@ fun CaptureOverlayBar(ip: String, modifier: Modifier = Modifier) {
         }
     }
 
-    val maskedIp = remember(ip) {
-        val parts = ip.split(".")
-        if (parts.size == 4) "${parts[0]}.***.${parts[3]}" else ip
-    }
-
     // Nav bar đã đen (SystemBarStyle.dark) — chỉ cần text trắng đè lên vùng đó
     Row(
         modifier = modifier
@@ -1338,7 +1333,7 @@ fun CaptureOverlayBar(ip: String, modifier: Modifier = Modifier) {
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            text       = if (maskedIp.isNotBlank()) "IP: $maskedIp" else "",
+            text       = if (ip.isNotBlank()) "IP: $ip" else "",
             color      = Color.White,
             fontSize   = 12.sp,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
