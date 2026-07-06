@@ -1328,25 +1328,28 @@ fun CaptureOverlayBar(ip: String, modifier: Modifier = Modifier) {
         if (parts.size == 4) "${parts[0]}.***.${parts[3]}" else ip
     }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.8f))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(
-            text       = if (maskedIp.isNotBlank()) "IP: $maskedIp" else "",
-            color      = Color.White,
-            fontSize   = 12.sp,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-        )
-        Text(
-            text       = timeText,
-            color      = Color.White,
-            fontSize   = 12.sp,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-        )
+    // modifier chỉ dùng cho positioning (align) — background đặt trên inner Row để không bị ảnh hưởng
+    Box(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.9f))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text       = if (maskedIp.isNotBlank()) "IP: $maskedIp" else "",
+                color      = Color.White,
+                fontSize   = 12.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
+            Text(
+                text       = timeText,
+                color      = Color.White,
+                fontSize   = 12.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
+        }
     }
 }
