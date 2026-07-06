@@ -1334,13 +1334,13 @@ fun CaptureOverlayBar(ip: String, modifier: Modifier = Modifier) {
     ) {
         Text(
             text       = if (ip.isNotBlank()) "IP: $ip" else "",
-            color      = Color.White,
+            color      = Color.Black,
             fontSize   = 12.sp,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
         )
         Text(
             text       = timeText,
-            color      = Color.White,
+            color      = Color.Black,
             fontSize   = 12.sp,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
         )
