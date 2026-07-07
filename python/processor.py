@@ -77,7 +77,7 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
 
         # Navigate to Google (handles cases where Chrome opened elsewhere)
         await cdp.navigate(GOOGLE_URL)
-        await _wait_dom(cdp, min_count=1, timeout=15)
+        await _wait_page_load(cdp, timeout=15)
 
         # ── 4. Accept Google consent if shown ─────────────────────────────
         consent_raw = await _safe_eval(cdp, ACCEPT_CONSENT_JS)
@@ -87,13 +87,26 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
                 if cr.get("clicked"):
                     log.info("Consent clicked: %s", cr.get("reason"))
                     await asyncio.sleep(2)
-                    await _wait_dom(cdp, min_count=1, timeout=10)
+                    await _wait_page_load(cdp, timeout=10)
             except Exception:
                 pass
 
         # ── 5. Submit search ───────────────────────────────────────────────
+        # Debug: log current URL to see what page Chrome is on
+        current_url = await _safe_eval(cdp, "window.location.href", timeout=5)
+        log.info("Current URL before search: %s", current_url)
+
         search_ok = await _safe_eval(cdp, build_search_js(req.keyword))
         log.info("Search submit result: %s", search_ok)
+        if not search_ok:
+            # Take screenshot for debugging
+            _fd2, dbg_shot = tempfile.mkstemp(suffix="_debug.png")
+            os.close(_fd2)
+            try:
+                await adb.take_screenshot(dbg_shot)
+                log.info("Debug screenshot: %s", dbg_shot)
+            except Exception:
+                pass
         await asyncio.sleep(2)
 
         # ── 6. Wait for results ────────────────────────────────────────────
@@ -158,6 +171,11 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
             await local_proxy.stop()
         try:
             await adb.clear_proxy()
+        except Exception:
+            pass
+        # Force-stop Chrome so it doesn't retain stale proxy settings
+        try:
+            await adb.force_stop_chrome()
         except Exception:
             pass
         try:
@@ -229,6 +247,29 @@ def _check_duplicate_domain(items: list) -> Optional[str]:
     if len(top) >= 8 and len(counts) <= 2 and worst_count >= 5:
         return f"Submit fail: top lap bat thuong {worst_domain} {worst_count}/{len(top)}"
     return None
+
+
+_SEARCH_BOX_JS = (
+    "(function(){"
+    "var box=document.querySelector('textarea[name=\"q\"],input[name=\"q\"]');"
+    "var consent=document.querySelector('button[id*=\"accept\"],button[id*=\"agree\"],"
+    "form[action*=\"consent\"] button,#L2AGLb,#W0wltc');"
+    "return !!(box||consent);"
+    "})()"
+)
+
+
+async def _wait_page_load(cdp: CDPClient, timeout: float = 20) -> None:
+    """Wait until Google homepage search box (or consent button) is present."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        val = await _safe_eval(cdp, _SEARCH_BOX_JS, timeout=5)
+        if val:
+            return
+        if asyncio.get_event_loop().time() >= deadline:
+            log.warning("Page load timeout — proceeding anyway")
+            return
+        await asyncio.sleep(DOM_POLL_INTERVAL)
 
 
 async def _wait_dom(cdp: CDPClient, min_count: int = 1, timeout: float = 30) -> None:

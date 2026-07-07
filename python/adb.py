@@ -38,8 +38,7 @@ class ADB:
         log.info("ADB proxy set: %s:%d", host, port)
 
     async def clear_proxy(self) -> None:
-        # ":0" is the Android convention for "no proxy"
-        await self._run("shell", "settings", "put", "global", "http_proxy", ":0")
+        await self._run_silent("shell", "settings", "delete", "global", "http_proxy")
         log.info("ADB proxy cleared")
 
     async def forward_cdp(self) -> None:
