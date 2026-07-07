@@ -52,6 +52,14 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _on_signal)
 
+    # Clear any leftover proxy from a previous crashed run
+    try:
+        await adb.clear_proxy()
+        await adb.remove_cdp_forward()
+        log.info("ADB state cleared on startup")
+    except Exception as e:
+        log.warning("Startup cleanup error: %s", e)
+
     log.info("Fetching device info via ADB…")
     try:
         info = await adb.get_device_info()
