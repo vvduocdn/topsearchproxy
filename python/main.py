@@ -1,6 +1,7 @@
 """Entry point: connect to SignalR, queue incoming keywords, process them one at a time."""
 import asyncio
 import logging
+import signal
 import sys
 from typing import List
 
@@ -41,6 +42,16 @@ async def _on_batch(batch: List[SocketRequest]) -> None:
 async def main() -> None:
     adb = ADB(serial=ADB_SERIAL, cdp_port=CDP_LOCAL_PORT)
 
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _on_signal():
+        log.info("Shutdown signal received — cleaning up…")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _on_signal)
+
     log.info("Fetching device info via ADB…")
     try:
         info = await adb.get_device_info()
@@ -56,15 +67,27 @@ async def main() -> None:
     client = SignalRClient(url=SOCKET_URL, on_batch=_on_batch)
 
     worker_task = asyncio.create_task(_worker(source_name, client))
+    signalr_task = asyncio.create_task(client.run_forever())
 
-    try:
-        await client.run_forever()
-    finally:
-        worker_task.cancel()
+    await stop_event.wait()
+
+    signalr_task.cancel()
+    worker_task.cancel()
+    for task in (signalr_task, worker_task):
         try:
-            await worker_task
-        except asyncio.CancelledError:
+            await task
+        except (asyncio.CancelledError, Exception):
             pass
+
+    # Always clear proxy on exit so Android has internet
+    log.info("Clearing ADB proxy…")
+    try:
+        await adb.clear_proxy()
+        await adb.remove_cdp_forward()
+    except Exception as e:
+        log.warning("Cleanup error: %s", e)
+
+    log.info("Shutdown complete")
 
 
 if __name__ == "__main__":
