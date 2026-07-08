@@ -284,7 +284,12 @@ class ADB:
         dir_path = remote_path.rsplit("/", 1)[0]
         await self._run_silent("shell", "mkdir", "-p", dir_path, timeout=5)
 
-        cmd = self._base() + ["shell", "screenrecord", "--bit-rate", str(bit_rate), remote_path]
+        cmd = self._base() + [
+            "shell", "screenrecord",
+            "--bit-rate", str(bit_rate),
+            "--time-limit", "3600",
+            remote_path,
+        ]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,

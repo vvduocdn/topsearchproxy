@@ -99,7 +99,9 @@ async def _worker(source_name: str, client: SignalRClient, adb: ADB) -> None:
             await adb._run_silent("shell", "pkill", "-2", "screenrecord", timeout=5)
             await asyncio.sleep(1.5)
 
-            log.info("Batch done — sending %d recording segment(s) to Telegram", len(segments))
+            # Pull all segments from device to PC
+            log.info("Batch done — pulling %d segment(s) from device", len(segments))
+            local_segs: list[str] = []
             for i, remote in enumerate(list(segments)):
                 _fd, local = tempfile.mkstemp(suffix=".mp4")
                 os.close(_fd)
@@ -108,13 +110,58 @@ async def _worker(source_name: str, client: SignalRClient, adb: ADB) -> None:
                     log.info("Segment %d/%d on device: %s bytes — %s", i + 1, len(segments), size, remote)
                     await adb.pull_file(remote, local)
                     await adb.media_scan(remote)
-                    await telegram.send_video(local)
+                    local_segs.append(local)
                 except Exception as e:
-                    log.warning("Failed to pull/send segment %d (%s): %s", i + 1, remote, e)
-                finally:
+                    log.warning("Failed to pull segment %d (%s): %s", i + 1, remote, e)
                     if os.path.exists(local):
                         os.remove(local)
             segments.clear()
+
+            if not local_segs:
+                log.warning("No segments pulled — nothing to send")
+            elif len(local_segs) == 1:
+                try:
+                    await telegram.send_video(local_segs[0])
+                except Exception as e:
+                    log.warning("Failed to send video: %s", e)
+                finally:
+                    os.remove(local_segs[0])
+            else:
+                _fd, merged = tempfile.mkstemp(suffix=".mp4")
+                os.close(_fd)
+                try:
+                    await _concat_segments(local_segs, merged)
+                    await telegram.send_video(merged)
+                except Exception as e:
+                    log.warning("Failed to concat/send merged video: %s", e)
+                finally:
+                    if os.path.exists(merged):
+                        os.remove(merged)
+                    for seg in local_segs:
+                        if os.path.exists(seg):
+                            os.remove(seg)
+
+
+async def _concat_segments(local_paths: list[str], output: str) -> None:
+    """Merge MP4 segments into one file using ffmpeg copy (no re-encode)."""
+    list_file = output + ".txt"
+    with open(list_file, "w") as f:
+        for p in local_paths:
+            f.write(f"file '{p}'\n")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", list_file, "-c", "copy", output,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg: {stderr.decode().strip()[-300:]}")
+        log.info("Merged %d segments → %s (%d bytes)", len(local_paths), output, os.path.getsize(output))
+    finally:
+        if os.path.exists(list_file):
+            os.remove(list_file)
 
 
 async def _on_batch(batch: List[SocketRequest]) -> None:
