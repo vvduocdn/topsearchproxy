@@ -94,7 +94,7 @@ class CDPClient:
 
     async def inject_overlay(self, ip: str, keyword: str) -> None:
         """Inject a compact side overlay showing IP, keyword, and current time."""
-        now = time.strftime("%H:%M:%S %d/%m/%Y")
+        now = time.strftime("%d/%m/%Y")
         safe_ip      = ip.replace("'", "").replace("<", "").replace(">", "")
         safe_keyword = keyword.replace("'", "").replace("\\", "").replace("<", "").replace(">", "")
         safe_now     = now.replace("'", "")
