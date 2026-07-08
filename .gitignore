@@ -26,3 +26,8 @@ google-services.json
 Demo_QuyTrinh_AppTopsearch/
 Demo_QuyTrinh_AppTopsearch.zip
 app/release/
+
+# Python
+.venv/
+python/__pycache__/
+*.pyc
