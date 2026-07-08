@@ -33,7 +33,10 @@ class LocalProxyServer:
     async def stop(self) -> None:
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            try:
+                await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
+            except asyncio.TimeoutError:
+                pass
             self._server = None
             log.info("LocalProxy stopped")
 
@@ -41,14 +44,16 @@ class LocalProxyServer:
         try:
             headers = await _read_headers(reader)
             if not headers:
+                log.debug("LocalProxy: empty request")
                 return
             req = headers[0]
+            log.debug("LocalProxy: %s", req[:100])
             if req.startswith("CONNECT "):
                 await self._handle_connect(req, reader, writer, headers)
             else:
                 await self._handle_http(req, headers, reader, writer)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("LocalProxy handle error: %s", e)
         finally:
             _close(writer)
 
@@ -58,16 +63,20 @@ class LocalProxyServer:
             return
         target = parts[1]
         try:
-            rr, rw = await asyncio.open_connection(self._remote_host, self._remote_port)
+            rr, rw = await asyncio.wait_for(
+                asyncio.open_connection(self._remote_host, self._remote_port),
+                timeout=15,
+            )
             try:
                 rw.write(f"{req}\r\n".encode() + self._auth_header + f"Host: {target}\r\n\r\n".encode())
                 await rw.drain()
 
                 resp = await _read_headers(rr)
                 status = resp[0] if resp else ""
-                log.debug("CONNECT %s -> %s", target, status)
+                log.info("CONNECT %s -> %s", target, status)
 
                 if "200" not in status:
+                    log.warning("CONNECT %s: proxy rejected (%s)", target, status)
                     cw.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                     await cw.drain()
                     return
@@ -77,12 +86,17 @@ class LocalProxyServer:
                 await _relay(cr, cw, rr, rw)
             finally:
                 _close(rw)
+        except asyncio.TimeoutError:
+            log.warning("CONNECT %s: timeout connecting to %s:%d", target, self._remote_host, self._remote_port)
         except Exception as e:
-            log.warning("CONNECT error %s: %s", target, e)
+            log.warning("CONNECT %s: %s", target, e)
 
     async def _handle_http(self, req: str, headers: list[str], cr: asyncio.StreamReader, cw: asyncio.StreamWriter) -> None:
         try:
-            rr, rw = await asyncio.open_connection(self._remote_host, self._remote_port)
+            rr, rw = await asyncio.wait_for(
+                asyncio.open_connection(self._remote_host, self._remote_port),
+                timeout=15,
+            )
             try:
                 rw.write(f"{req}\r\n".encode())
                 rw.write(self._auth_header)
@@ -94,6 +108,8 @@ class LocalProxyServer:
                 await _relay(cr, cw, rr, rw)
             finally:
                 _close(rw)
+        except asyncio.TimeoutError:
+            log.warning("HTTP proxy timeout connecting to %s:%d", self._remote_host, self._remote_port)
         except Exception as e:
             log.debug("HTTP proxy error: %s", e)
 

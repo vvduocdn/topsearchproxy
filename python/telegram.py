@@ -56,15 +56,16 @@ async def _do_upload(file_path: str) -> str:
 
 
 async def _send_document(file_path: str) -> Optional[str]:
+    with open(file_path, "rb") as f:
+        file_bytes = f.read()
     async with aiohttp.ClientSession() as session:
         data = aiohttp.FormData()
         data.add_field("chat_id", CHAT_ID)
-        with open(file_path, "rb") as f:
-            data.add_field(
-                "document", f,
-                filename=os.path.basename(file_path),
-                content_type="image/jpeg",
-            )
+        data.add_field(
+            "document", file_bytes,
+            filename=os.path.basename(file_path),
+            content_type="image/jpeg",
+        )
         async with session.post(
             f"{BOT_BASE}/sendDocument",
             data=data,
@@ -89,6 +90,38 @@ async def _get_file_path(file_id: str) -> Optional[str]:
                 log.error("getFile failed: %s", body)
                 return None
             return body["result"]["file_path"]
+
+
+async def send_video(file_path: str) -> bool:
+    """Upload a video file to Telegram chat via sendVideo."""
+    if not file_path or not os.path.exists(file_path):
+        log.error("Video not found: %s", file_path)
+        return False
+    try:
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        async with aiohttp.ClientSession() as session:
+            data = aiohttp.FormData()
+            data.add_field("chat_id", CHAT_ID)
+            data.add_field(
+                "video", file_bytes,
+                filename=os.path.basename(file_path),
+                content_type="video/mp4",
+            )
+            async with session.post(
+                f"{BOT_BASE}/sendVideo",
+                data=data,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                body = await resp.json(content_type=None)
+                if not body.get("ok"):
+                    log.error("sendVideo failed: %s", body)
+                    return False
+                log.info("Video sent to Telegram: %s", os.path.basename(file_path))
+                return True
+    except Exception as e:
+        log.error("send_video failed: %s", e)
+        return False
 
 
 async def send_message(text: str) -> bool:

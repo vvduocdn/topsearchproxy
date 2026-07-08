@@ -45,7 +45,11 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
 
     try:
         proxy_info = _parse_proxy(req.proxy)
-        log.info("START reqId=%s keyword='%s' proxy=%s", req.request_id, req.keyword, req.proxy)
+        log.info(
+            "START reqId=%s keyword='%s' proxy=%r -> parsed=%s",
+            req.request_id, req.keyword, req.proxy,
+            f"{proxy_info['host']}:{proxy_info['port']} (auth={bool(proxy_info['user'])})" if proxy_info else "None (no proxy)",
+        )
 
         # ── 1. Stop Chrome → set proxy → restart Chrome ────────────────────
         await adb.force_stop_chrome()
@@ -59,27 +63,64 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
                     password=proxy_info["pass"],
                 )
                 await local_proxy.start()
-                pc_ip = adb.get_local_ip()
-                await adb.set_proxy(pc_ip, local_proxy.local_port)
+                # adb reverse: Android 127.0.0.1:PORT → PC localhost:PORT via USB
+                await adb.reverse_port(local_proxy.local_port)
+                await adb.set_proxy("127.0.0.1", local_proxy.local_port)
+                log.info("Proxy via LocalProxy :%d → %s:%d (auth user=%s)",
+                         local_proxy.local_port, proxy_info["host"], proxy_info["port"], proxy_info["user"])
             else:
                 await adb.set_proxy(proxy_info["host"], proxy_info["port"])
+                log.info("Proxy direct: %s:%d", proxy_info["host"], proxy_info["port"])
         else:
             await adb.clear_proxy()
+            log.info("No proxy — direct connection")
 
-        # ── 2. Forward CDP + launch Chrome ────────────────────────────────
+        # ── 1b. Get public IP now (proxy is ready, before Chrome launches) ─
+        public_ip = await _get_public_ip(proxy_info, local_proxy)
+
+        # ── 2. Forward CDP + launch Chrome ────────────────────────────────────
         await adb.forward_cdp()
+        await adb.launch_chrome("about:blank")
+
+        # ── 3. Clear browsing data via 3-dot menu (ADB taps, no CDP needed) ─
+        await adb.clear_data_via_menu()
+        # After clearing "Thẻ" (Tabs) Chrome closes. Force-stop then launch
+        # directly to Google — 1 tab, right page, visible on screen immediately.
+        await adb.force_stop_chrome()
+        await asyncio.sleep(1.0)
         await adb.launch_chrome(GOOGLE_URL)
-        await asyncio.sleep(2.5)
 
-        # ── 3. Connect CDP ─────────────────────────────────────────────────
+        # ── 4. Connect CDP (retry Chrome launch once if devtools not ready) ─
         cdp = CDPClient(port=CDP_LOCAL_PORT)
-        await cdp.connect(retries=15, retry_delay=1.0)
+        try:
+            await cdp.connect(retries=15, retry_delay=1.0)
+        except RuntimeError:
+            log.warning("CDP not ready — restarting Chrome and retrying")
+            try:
+                await cdp.close()
+            except Exception:
+                pass
+            cdp = None
+            await adb.force_stop_chrome()
+            await asyncio.sleep(2.0)
+            await adb.forward_cdp()
+            await adb.launch_chrome(GOOGLE_URL)
+            await asyncio.sleep(3.0)
+            cdp = CDPClient(port=CDP_LOCAL_PORT)
+            await cdp.connect(retries=15, retry_delay=1.0)
 
-        # Navigate to Google (handles cases where Chrome opened elsewhere)
-        await cdp.navigate(GOOGLE_URL)
+        # ── 5. Wait for Google to load ─────────────────────────────────────
         await _wait_page_load(cdp, timeout=15)
 
-        # ── 4. Accept Google consent if shown ─────────────────────────────
+        # Safety net: if CDP connected to the wrong tab (e.g. chrome-native://newtab/)
+        # navigate to Google explicitly so the search box is present.
+        _tab_url = await _safe_eval(cdp, "window.location.href", timeout=5)
+        if _tab_url and "google.com" not in _tab_url:
+            log.info("Wrong tab after connect (%s) — navigating to Google", _tab_url)
+            await cdp.navigate(GOOGLE_URL)
+            await _wait_page_load(cdp, timeout=15)
+
+        # ── 6. Accept Google consent if shown ─────────────────────────────
         consent_raw = await _safe_eval(cdp, ACCEPT_CONSENT_JS)
         if consent_raw:
             try:
@@ -91,29 +132,43 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
             except Exception:
                 pass
 
-        # ── 5. Submit search ───────────────────────────────────────────────
-        # Debug: log current URL to see what page Chrome is on
+        # ── 7. Submit search ───────────────────────────────────────────────
         current_url = await _safe_eval(cdp, "window.location.href", timeout=5)
         log.info("Current URL before search: %s", current_url)
 
         search_ok = await _safe_eval(cdp, build_search_js(req.keyword))
         log.info("Search submit result: %s", search_ok)
         if not search_ok:
-            # Take screenshot for debugging
-            _fd2, dbg_shot = tempfile.mkstemp(suffix="_debug.png")
+            _fd2, dbg_shot = tempfile.mkstemp(suffix="_debug.jpg")
             os.close(_fd2)
             try:
-                await adb.take_screenshot(dbg_shot)
+                await cdp.screenshot_full_page(dbg_shot)
                 log.info("Debug screenshot: %s", dbg_shot)
             except Exception:
                 pass
+            raise RuntimeError(f"Search submit failed — page not loaded (URL={current_url})")
         await asyncio.sleep(2)
 
-        # ── 6. Wait for results ────────────────────────────────────────────
+        # ── 8. Wait for results ────────────────────────────────────────────
         await _wait_dom(cdp, min_count=10, timeout=SEARCH_TIMEOUT)
         checked_at = int(time.time() * 1000)
 
-        # ── 7. Extract ────────────────────────────────────────────────────
+        # ── 9. Overlay + scroll (overlay visible from results load through scroll) ─
+        await cdp.inject_overlay(ip=public_ip or "unknown", keyword=req.keyword)
+        await asyncio.sleep(5)
+        await cdp.scroll_to_bottom()
+        await asyncio.sleep(0.5)
+
+        # ── 9b. Screenshot via adb screencap (physical screen = bottom of page) ──
+        _fd, screenshot = tempfile.mkstemp(suffix=".png")
+        os.close(_fd)
+        try:
+            await adb.take_screenshot(screenshot)
+        except Exception as e:
+            log.warning("Screenshot failed: %s", e)
+            screenshot = None
+
+        # ── 10. Extract ───────────────────────────────────────────────────
         raw = await _safe_eval(cdp, EXTRACT_HEADINGS_IN_IMAGE_ORDER_JS, timeout=30)
         if not raw:
             raise RuntimeError("Extraction returned empty result")
@@ -128,24 +183,16 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
         if dup_reason:
             raise RuntimeError(dup_reason)
 
-        # ── 8. Screenshot ─────────────────────────────────────────────────
-        _fd, screenshot = tempfile.mkstemp(suffix=".jpg")
-        os.close(_fd)
-        await adb.take_screenshot(screenshot)
-
-        # ── 9. Public IP ──────────────────────────────────────────────────
-        public_ip = await _get_public_ip(proxy_info, local_proxy)
-
-        # ── 10. Telegram ──────────────────────────────────────────────────
+        # ── 10. Telegram (non-blocking — failure does not cancel submit) ──
         image_url = await telegram.upload(screenshot)
-        if not image_url:
-            raise RuntimeError("Telegram upload failed")
+        if image_url:
+            result_msg = telegram.build_result_message(req.keyword, items)
+            if result_msg:
+                await telegram.send_message(result_msg)
+        else:
+            log.warning("Telegram upload failed — submitting without image")
 
-        result_msg = telegram.build_result_message(req.keyword, items)
-        if result_msg:
-            await telegram.send_message(result_msg)
-
-        # ── 11. Submit ────────────────────────────────────────────────────
+        # ── 11. Submit (always fires when results are ready) ──────────────
         log.info("SUBMIT reqId=%s items=%d publicIp=%s", req.request_id, len(items), public_ip)
         sent = await client.submit(
             request_id=req.request_id,
@@ -167,15 +214,19 @@ async def _do_process(req: SocketRequest, source_name: str, client: SignalRClien
                 await cdp.close()
             except Exception:
                 pass
+        try:
+            await adb.force_stop_chrome()
+        except Exception:
+            pass
+
         if local_proxy:
+            try:
+                await adb.remove_reverse_port(local_proxy.local_port)
+            except Exception:
+                pass
             await local_proxy.stop()
         try:
             await adb.clear_proxy()
-        except Exception:
-            pass
-        # Force-stop Chrome so it doesn't retain stale proxy settings
-        try:
-            await adb.force_stop_chrome()
         except Exception:
             pass
         try:
