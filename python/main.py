@@ -25,23 +25,47 @@ _queue: asyncio.Queue[SocketRequest] = asyncio.Queue()
 
 
 async def _worker(source_name: str, client: SignalRClient, adb: ADB) -> None:
-    rec_proc:   Optional[asyncio.subprocess.Process] = None
-    rec_remote: Optional[str]                        = None
+    # screenrecord has a hard 180-second limit per run.  The watchdog below
+    # restarts it automatically so a long batch is captured across multiple
+    # segments, all sent to Telegram at the end.
+    segments: list[str] = []
+    _seg_idx = 0
+    _safe_id = ""
+    _cur_proc: Optional[asyncio.subprocess.Process] = None
+    _stop_rec = asyncio.Event()
+    watchdog_task: Optional[asyncio.Task] = None
+
+    async def _watchdog() -> None:
+        nonlocal _seg_idx, _cur_proc
+        while not _stop_rec.is_set():
+            remote = f"/sdcard/DCIM/rec_{_safe_id}_{_seg_idx:02d}.mp4"
+            try:
+                proc = await adb.start_screenrecord(remote)
+                _cur_proc = proc
+                segments.append(remote)
+                log.info("Recording segment %02d started: %s", _seg_idx, remote)
+                _seg_idx += 1
+                await proc.wait()   # returns when screenrecord hits 3-min limit or SIGINT
+                _cur_proc = None
+                log.info("Recording segment ended: %s", remote)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.warning("Recording segment error: %s — retrying in 2s", e)
+                _cur_proc = None
+                await asyncio.sleep(2)
 
     while True:
         req = await _queue.get()
 
-        # Start recording once at the beginning of a new batch
-        if rec_proc is None:
+        # Start recording watchdog once at the beginning of a new batch
+        if watchdog_task is None:
             _safe_id = "".join(c if c.isalnum() else "_" for c in req.request_id[:8])
-            rec_remote = f"/sdcard/DCIM/rec_{_safe_id}.mp4"
-            try:
-                rec_proc = await adb.start_screenrecord(rec_remote)
-                log.info("Batch recording started: %s", rec_remote)
-            except Exception as e:
-                log.warning("Screenrecord start failed (continuing without): %s", e)
-                rec_proc = None
-                rec_remote = None
+            _stop_rec.clear()
+            _seg_idx = 0
+            segments.clear()
+            watchdog_task = asyncio.create_task(_watchdog())
+            log.info("Batch recording watchdog started (id=%s)", _safe_id)
 
         try:
             await process(req, source_name, client)
@@ -50,27 +74,47 @@ async def _worker(source_name: str, client: SignalRClient, adb: ADB) -> None:
         finally:
             _queue.task_done()
 
-        # When queue is empty (all keywords done), finalize and send the recording
-        if _queue.empty() and rec_proc and rec_remote:
-            _rec_proc   = rec_proc
-            _rec_remote = rec_remote
-            rec_proc    = None
-            rec_remote  = None
-            try:
-                await adb.stop_screenrecord(_rec_proc)
+        # All keywords done — finalize and send all segments
+        if _queue.empty() and watchdog_task is not None:
+            _stop_rec.set()
+
+            # Stop the current segment gracefully (SIGINT → moov atom flushed)
+            cur = _cur_proc
+            _cur_proc = None
+            if cur is not None and cur.returncode is None:
                 try:
-                    size = await adb._run("shell", "stat", "-c", "%s", _rec_remote, timeout=5)
-                    log.info("Batch recording on device: %s bytes", size)
-                except Exception:
-                    log.warning("Recording file not found on device: %s", _rec_remote)
-                _fd, rec_local = tempfile.mkstemp(suffix=".mp4")
+                    await adb.stop_screenrecord(cur)
+                except Exception as e:
+                    log.warning("Stop recording segment error: %s", e)
+
+            # Cancel watchdog (prevents race-condition new segment from starting)
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            watchdog_task = None
+
+            # Safety: kill any screenrecord still running on device after race window
+            await adb._run_silent("shell", "pkill", "-2", "screenrecord", timeout=5)
+            await asyncio.sleep(1.5)
+
+            log.info("Batch done — sending %d recording segment(s) to Telegram", len(segments))
+            for i, remote in enumerate(list(segments)):
+                _fd, local = tempfile.mkstemp(suffix=".mp4")
                 os.close(_fd)
-                await adb.pull_file(_rec_remote, rec_local)
-                await adb.media_scan(_rec_remote)
-                await telegram.send_video(rec_local)
-                os.remove(rec_local)
-            except Exception as e:
-                log.warning("Batch recording finalize failed: %s", e)
+                try:
+                    size = await adb._run("shell", "stat", "-c", "%s", remote, timeout=5)
+                    log.info("Segment %d/%d on device: %s bytes — %s", i + 1, len(segments), size, remote)
+                    await adb.pull_file(remote, local)
+                    await adb.media_scan(remote)
+                    await telegram.send_video(local)
+                except Exception as e:
+                    log.warning("Failed to pull/send segment %d (%s): %s", i + 1, remote, e)
+                finally:
+                    if os.path.exists(local):
+                        os.remove(local)
+            segments.clear()
 
 
 async def _on_batch(batch: List[SocketRequest]) -> None:
